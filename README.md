@@ -2,13 +2,19 @@
   <img src="src-tauri/icons/128x128@2x.png" alt="Dev Browzer app icon" width="128" />
 </p>
 
+
 # Dev Browzer
 
 **See your website at every important size, all at once.**
 
+<p >
+  <img src="assets/dev-browzer_home.jpeg" alt="Dev Browzer app icon" width="800" />
+</p>
+
 Dev Browzer is a Windows desktop app for checking a site across phone, tablet, and desktop
-screens without constantly resizing a browser window. Open your local site once, then explore it
-side by side in synchronized previews.
+screens without constantly resizing a browser window. Open your local site once, then explore it side by side in synchronized previews.
+
+
 
 ## What you can do
 
@@ -47,13 +53,11 @@ need to compare both orientations.
 
 ## A private, local workspace
 
-Dev Browzer works directly with the addresses you give it. It does not require an account, proxy,
-backend service, or bundled web server.
+Dev Browzer works directly with the addresses you give it. It does not require an account, proxy, backend service, or bundled web server.
 
 ## Running Dev Browzer from source
 
-For installation requirements, development commands, quality checks, packaging, and the security
-model, see the [technical guide](TECHNICAL.md).
+For installation requirements, development commands, quality checks, packaging, and the security model, see the [technical guide](TECHNICAL.md). Notices this appliation is mainly develop by the assist of LLM / AI.
 
 ## License
 
