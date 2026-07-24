@@ -1,76 +1,59 @@
+<p align="center">
+  <img src="src-tauri/icons/128x128@2x.png" alt="Dev Browzer app icon" width="128" />
+</p>
+
 # Dev Browzer
 
-Dev Browzer is a Windows desktop workbench for viewing one development site at
-phone, tablet, HD, and high-resolution desktop sizes at the same time. It uses
-native Tauri child webviews, so previewed sites are not limited by iframe CSP or
-`X-Frame-Options` rules.
+**See your website at every important size, all at once.**
 
-## Features
+Dev Browzer is a Windows desktop app for checking a site across phone, tablet, and desktop
+screens without constantly resizing a browser window. Open your local site once, then explore it
+side by side in synchronized previews.
 
-- Six responsive previews enabled by default, with optional 4K and custom sizes
-- Navigation synchronization for links, redirects, SPA history, hashes, and popups
-- Shared Back, Forward, Home, Reload All, per-preview Reload, Focus, and DevTools
-- Per-preview scaling and free-position drag layout with one-click auto arrange
-- Persistent projects, current addresses, viewports, preview layouts, and recent URLs
-- Native WebView2 previews with shared browser profile and exact CSS viewport sizes
-- Local-only operation: no account, proxy, backend, or bundled target web server
+## What you can do
 
-## Prerequisites
+|                                |                                                                                                              |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| **Compare responsive layouts** | Keep phone, tablet, HD, and 2K desktop views visible together. Turn on 4K when you need it.                  |
+| **Browse in sync**             | Follow a link, redirect, back action, hash change, or popup in one preview and the other views can follow.   |
+| **Make the workspace yours**   | Choose the viewports you need, add a custom device size, rearrange previews, and pick up where you left off. |
+| **Stay focused on your site**  | Reload every preview together, jump home, open developer tools for a single view, or focus one preview.      |
 
-- Windows 10 or 11 with Microsoft Edge WebView2
-- Node.js 20 or newer
-- Rust stable with the MSVC Windows target and C++ build tools
-- Corepack
+## Start previewing
 
-The repository pins Yarn through the `packageManager` field and uses the
-`node-modules` linker.
+1. Start the website you want to check, such as your usual local development server.
+2. Open Dev Browzer and create a project.
+3. Give it a name and enter your site address, for example `localhost:3000`.
+4. Select the phone, tablet, and desktop sizes you want from the sidebar.
+5. Browse your site. With **Sync** on, the selected previews stay on the same page.
 
-## Setup
+Dev Browzer remembers your projects, addresses, enabled viewports, and preview layout, so your
+next review begins where the last one ended.
 
-```powershell
-corepack enable
-yarn install
-yarn tauri dev
-```
+## Built-in screen sizes
 
-Run the web application you want to inspect separately, then create a Dev
-Browzer project using its local URL. Bare hosts such as `localhost:3000`
-automatically use HTTP.
+| Device          | Size        |
+| --------------- | ----------- |
+| Phone portrait  | 390 × 844   |
+| Phone landscape | 844 × 390   |
+| iPad portrait   | 768 × 1024  |
+| iPad landscape  | 1024 × 768  |
+| HD desktop      | 1920 × 1080 |
+| 2K / QHD        | 2560 × 1440 |
+| 4K / UHD        | 3840 × 2160 |
 
-To exercise the included navigation fixture in another terminal:
+Need a particular laptop, kiosk, or test device? Add a custom viewport and rotate it whenever you
+need to compare both orientations.
 
-```powershell
-yarn fixture
-```
+## A private, local workspace
 
-Then point a project to `http://localhost:4173`.
+Dev Browzer works directly with the addresses you give it. It does not require an account, proxy,
+backend service, or bundled web server.
 
-## Verification
+## Running Dev Browzer from source
 
-```powershell
-yarn fmt
-yarn fmt:check
-yarn lint
-yarn typecheck
-yarn test
-yarn build
-
-Set-Location src-tauri
-cargo fmt --check
-cargo clippy -- -D warnings
-cargo test
-Set-Location ..
-
-yarn tauri build
-```
-
-Installers are written below `src-tauri/target/release/bundle`.
-
-## Security model
-
-Only `http:` and `https:` preview URLs are accepted by both the React shell and
-Rust commands. The bundled main shell is the only webview granted Tauri
-capabilities; remote preview webviews cannot call Store or native commands.
+For installation requirements, development commands, quality checks, packaging, and the security
+model, see the [technical guide](TECHNICAL.md).
 
 ## License
 

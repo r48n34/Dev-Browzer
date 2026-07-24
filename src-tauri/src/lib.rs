@@ -14,6 +14,7 @@ pub fn run() {
             preview::reload_previews,
             preview::reload_preview,
             preview::open_preview_devtools,
+            preview::bring_preview_to_front,
             preview::set_previews_visible,
             preview::set_navigation_sync,
             preview::close_previews,

@@ -67,6 +67,14 @@ export interface PreviewLayout {
   viewportHeight: number;
   scale: number;
   visible: boolean;
+  occlusion?: PreviewRectangle;
+}
+
+export interface PreviewRectangle {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 export type PreviewLoadState = 'idle' | 'loading' | 'ready' | 'error';

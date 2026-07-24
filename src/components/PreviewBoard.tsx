@@ -13,7 +13,13 @@ import {
 } from '@tabler/icons-react';
 import { getProjectViewports } from '../config/viewports';
 import { usePreviewGeometry } from '../hooks/usePreviewGeometry';
-import { isTauriRuntime, openPreviewDevtools, reloadPreview } from '../native/bridge';
+import {
+  bringPreviewToFront,
+  isTauriRuntime,
+  listenForActivePreview,
+  openPreviewDevtools,
+  reloadPreview,
+} from '../native/bridge';
 import { useDevBrowzer } from '../state/context';
 import type { PreviewBoardLayout, PreviewLoadState, ViewportDefinition } from '../types';
 import {
@@ -61,6 +67,7 @@ export function PreviewBoard({ previewsVisible, focusedId, onFocus }: PreviewBoa
     useDevBrowzer();
   const [liveLayouts, setLiveLayouts] = useState<Record<string, PreviewBoardLayout>>({});
   const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [activeId, setActiveId] = useState<string | null>(null);
   const dragRef = useRef<DragSession | null>(null);
 
   const allViewports = useMemo(
@@ -73,7 +80,11 @@ export function PreviewBoard({ previewsVisible, focusedId, onFocus }: PreviewBoa
   const renderedViewports = focusedId
     ? allViewports.filter((viewport) => viewport.id === focusedId)
     : allViewports;
-  const { registerSurface, measure } = usePreviewGeometry(allViewports, previewsVisible);
+  const { registerCard, registerSurface, measure } = usePreviewGeometry(
+    allViewports,
+    previewsVisible,
+    activeId,
+  );
 
   const scaleById = useMemo(
     () =>
@@ -101,8 +112,27 @@ export function PreviewBoard({ previewsVisible, focusedId, onFocus }: PreviewBoa
   useEffect(() => {
     setLiveLayouts({});
     setDraggingId(null);
+    setActiveId(null);
     dragRef.current = null;
   }, [activeProject?.id]);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: () => void = () => undefined;
+
+    void listenForActivePreview((viewportId) => setActiveId(viewportId)).then((cleanup) => {
+      if (disposed) {
+        cleanup();
+      } else {
+        unlisten = cleanup;
+      }
+    });
+
+    return () => {
+      disposed = true;
+      unlisten();
+    };
+  }, []);
 
   useEffect(() => {
     measure();
@@ -154,8 +184,17 @@ export function PreviewBoard({ previewsVisible, focusedId, onFocus }: PreviewBoa
     return null;
   }
 
-  const startDragging = (viewportId: string, event: PointerEvent<HTMLButtonElement>) => {
-    if (focusedId) {
+  const activateBoard = (viewportId: string) => {
+    setActiveId(viewportId);
+    void bringPreviewToFront(viewportId);
+  };
+
+  const startDragging = (viewportId: string, event: PointerEvent<HTMLElement>) => {
+    const target = event.target as HTMLElement;
+    if (
+      focusedId ||
+      target.closest('button, a, input, [role="button"], [role="slider"], [data-no-drag]')
+    ) {
       return;
     }
     const layout = getCurrentLayout(viewportId);
@@ -274,10 +313,13 @@ export function PreviewBoard({ previewsVisible, focusedId, onFocus }: PreviewBoa
           return (
             <Paper
               key={viewport.id}
+              ref={registerCard(viewport.id)}
               className="preview-card"
               data-dragging={draggingId === viewport.id}
+              data-active={activeId === viewport.id}
               radius="lg"
               withBorder
+              onPointerDownCapture={() => activateBoard(viewport.id)}
               style={
                 focused
                   ? { width: size.width }
@@ -288,19 +330,18 @@ export function PreviewBoard({ previewsVisible, focusedId, onFocus }: PreviewBoa
                     }
               }
             >
-              <Group justify="space-between" wrap="nowrap" className="preview-card-header">
+              <Group
+                justify="space-between"
+                wrap="nowrap"
+                className="preview-card-header"
+                data-testid={`preview-header-${viewport.id}`}
+                onPointerDown={(event) => startDragging(viewport.id, event)}
+              >
                 <Group gap={5} wrap="nowrap" miw={0}>
                   <Tooltip label={focused ? 'Exit focus to move this preview' : 'Drag to move'}>
-                    <ActionIcon
-                      className="preview-drag-handle"
-                      variant="subtle"
-                      size="sm"
-                      aria-label={`Drag ${viewport.name}`}
-                      disabled={focused}
-                      onPointerDown={(event) => startDragging(viewport.id, event)}
-                    >
+                    <Box component="span" className="preview-drag-handle" aria-hidden="true">
                       <IconGripVertical size={16} />
-                    </ActionIcon>
+                    </Box>
                   </Tooltip>
                   <Box miw={0}>
                     <Group gap={7} wrap="nowrap">

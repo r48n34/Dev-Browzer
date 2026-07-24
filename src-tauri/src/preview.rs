@@ -16,6 +16,7 @@ use url::Url;
 
 const NAVIGATION_EVENT: &str = "devbrowzer://navigation";
 const STATUS_EVENT: &str = "devbrowzer://status";
+const ACTIVE_PREVIEW_EVENT: &str = "devbrowzer://active-preview";
 const NAVIGATION_TITLE_PREFIX: &str = "__DEVBROWZER_NAV__";
 const TRANSACTION_WINDOW: Duration = Duration::from_millis(1_500);
 const MIN_VIEWPORT_SIZE: u32 = 240;
@@ -47,6 +48,16 @@ pub struct PreviewLayout {
     viewport_height: u32,
     scale: f64,
     visible: bool,
+    occlusion: Option<PreviewRectangle>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PreviewRectangle {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -370,6 +381,19 @@ pub async fn set_preview_layout(
     }
 
     Ok(())
+}
+
+#[tauri::command]
+pub async fn bring_preview_to_front(
+    webview: Webview,
+    app: AppHandle,
+    id: String,
+) -> Result<(), String> {
+    ensure_main_caller(&webview)?;
+    let preview = app
+        .get_webview(&preview_label(&id))
+        .ok_or_else(|| format!("Unknown preview: {id}"))?;
+    bring_webview_to_front(&preview)
 }
 
 #[tauri::command]
@@ -783,6 +807,7 @@ fn set_preview_bounds_and_zoom(
         .scale_factor()
         .map_err(|error| error.to_string())?;
     let geometry = calculate_native_geometry(layout, density);
+    let occlusion = calculate_native_occlusion(layout, &geometry, density);
     preview
         .set_bounds(Rect {
             position: PhysicalPosition::new(geometry.bounds.left, geometry.bounds.top).into(),
@@ -800,11 +825,132 @@ fn set_preview_bounds_and_zoom(
 
     preview
         .with_webview(move |platform_webview| unsafe {
-            let _ = platform_webview
-                .controller()
-                .SetBoundsAndZoomFactor(bounds, geometry.zoom_factor);
+            let controller = platform_webview.controller();
+            let _ = controller.SetBoundsAndZoomFactor(bounds, geometry.zoom_factor);
+            let _ = apply_controller_occlusion(
+                &controller,
+                geometry.width(),
+                geometry.height(),
+                occlusion,
+            );
         })
         .map_err(|error| error.to_string())
+}
+
+#[cfg(windows)]
+fn calculate_native_occlusion(
+    layout: &PreviewLayout,
+    geometry: &NativeGeometry,
+    density: f64,
+) -> Option<PhysicalBounds> {
+    let occlusion = layout.occlusion?;
+    let relative_left = (occlusion.x as f64 - layout.x as f64) * density;
+    let relative_top = (occlusion.y as f64 - layout.y as f64) * density;
+    let relative_right = (occlusion.x as f64 + occlusion.width as f64 - layout.x as f64) * density;
+    let relative_bottom =
+        (occlusion.y as f64 + occlusion.height as f64 - layout.y as f64) * density;
+
+    let left = relative_left.floor().clamp(0.0, geometry.width() as f64) as i32;
+    let top = relative_top.floor().clamp(0.0, geometry.height() as f64) as i32;
+    let right = relative_right.ceil().clamp(0.0, geometry.width() as f64) as i32;
+    let bottom = relative_bottom.ceil().clamp(0.0, geometry.height() as f64) as i32;
+
+    (left < right && top < bottom).then_some(PhysicalBounds {
+        left,
+        top,
+        right,
+        bottom,
+    })
+}
+
+#[cfg(windows)]
+unsafe fn apply_controller_occlusion(
+    controller: &webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Controller,
+    width: i32,
+    height: i32,
+    occlusion: Option<PhysicalBounds>,
+) -> Result<(), String> {
+    use windows::{
+        core::{Free, Owned},
+        Win32::Graphics::Gdi::{CombineRgn, CreateRectRgn, SetWindowRgn, RGN_DIFF},
+    };
+
+    let mut hwnd = Default::default();
+    unsafe {
+        controller
+            .ParentWindow(&mut hwnd)
+            .map_err(|error| error.to_string())?;
+
+        let Some(occlusion) = occlusion else {
+            if SetWindowRgn(hwnd, None, true) == 0 {
+                return Err("Unable to clear the preview clipping region.".to_owned());
+            }
+            return Ok(());
+        };
+
+        let mut visible_region = CreateRectRgn(0, 0, width, height);
+        let occlusion_region = Owned::new(CreateRectRgn(
+            occlusion.left,
+            occlusion.top,
+            occlusion.right,
+            occlusion.bottom,
+        ));
+        CombineRgn(
+            Some(visible_region),
+            Some(visible_region),
+            Some(*occlusion_region),
+            RGN_DIFF,
+        );
+
+        if SetWindowRgn(hwnd, Some(visible_region), true) == 0 {
+            visible_region.free();
+            return Err("Unable to apply the preview clipping region.".to_owned());
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(windows)]
+fn bring_webview_to_front(preview: &Webview) -> Result<(), String> {
+    preview
+        .with_webview(move |platform_webview| unsafe {
+            let controller = platform_webview.controller();
+            let _ = bring_controller_to_front(&controller);
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(windows)]
+unsafe fn bring_controller_to_front(
+    controller: &webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Controller,
+) -> Result<(), String> {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SetWindowPos, HWND_TOP, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER,
+        SWP_NOSIZE,
+    };
+
+    let mut hwnd = Default::default();
+    unsafe {
+        controller
+            .ParentWindow(&mut hwnd)
+            .map_err(|error| error.to_string())?;
+        SetWindowPos(
+            hwnd,
+            Some(HWND_TOP),
+            0,
+            0,
+            0,
+            0,
+            SWP_ASYNCWINDOWPOS | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOOWNERZORDER | SWP_NOSIZE,
+        )
+        .map_err(|error| error.to_string())
+    }
+}
+
+#[cfg(not(windows))]
+fn bring_webview_to_front(_preview: &Webview) -> Result<(), String> {
+    Ok(())
 }
 
 #[cfg(not(windows))]
@@ -829,12 +975,35 @@ fn install_native_navigation_observers(
     source_id: String,
 ) -> Result<(), String> {
     use webview2_com::{
-        HistoryChangedEventHandler, NavigationCompletedEventHandler, SourceChangedEventHandler,
+        FocusChangedEventHandler, HistoryChangedEventHandler, NavigationCompletedEventHandler,
+        SourceChangedEventHandler,
     };
 
     preview
         .with_webview(move |platform_webview| unsafe {
-            let Ok(core_webview) = platform_webview.controller().CoreWebView2() else {
+            let controller = platform_webview.controller();
+            let focus_app = app.clone();
+            let focus_source_id = source_id.clone();
+            let focus_handler = FocusChangedEventHandler::create(Box::new(
+                move |controller, _args| {
+                    if let Some(controller) = controller {
+                        let _ = bring_controller_to_front(&controller);
+                    }
+                    let _ = focus_app.emit(ACTIVE_PREVIEW_EVENT, &focus_source_id);
+                    Ok(())
+                },
+            ));
+            let mut focus_token = 0;
+            if let Err(error) = controller.add_GotFocus(&focus_handler, &mut focus_token) {
+                emit_status(
+                    &app,
+                    &source_id,
+                    "error",
+                    Some(format!("Unable to observe WebView2 focus changes: {error}")),
+                );
+            }
+
+            let Ok(core_webview) = controller.CoreWebView2() else {
                 emit_status(
                     &app,
                     &source_id,
@@ -1203,6 +1372,7 @@ mod tests {
             viewport_height: 844,
             scale: 0.25,
             visible: true,
+            occlusion: None,
         };
         let geometry = calculate_native_geometry(&layout, 1.0);
         let native_width = geometry.bounds.right - geometry.bounds.left;
@@ -1226,6 +1396,47 @@ mod tests {
                 right: native_width,
                 bottom: native_height,
             }
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn clips_a_background_preview_to_the_active_card_bounds() {
+        let layout = PreviewLayout {
+            id: "desktop".into(),
+            x: 100,
+            y: 200,
+            width: 400,
+            height: 300,
+            viewport_width: 1_600,
+            viewport_height: 1_200,
+            scale: 0.25,
+            visible: true,
+            occlusion: Some(PreviewRectangle {
+                x: 50,
+                y: 250,
+                width: 200,
+                height: 100,
+            }),
+        };
+        let geometry = NativeGeometry {
+            bounds: PhysicalBounds {
+                left: 100,
+                top: 200,
+                right: 500,
+                bottom: 500,
+            },
+            zoom_factor: 0.25,
+        };
+
+        assert_eq!(
+            calculate_native_occlusion(&layout, &geometry, 1.0),
+            Some(PhysicalBounds {
+                left: 0,
+                top: 50,
+                right: 150,
+                bottom: 150,
+            })
         );
     }
 

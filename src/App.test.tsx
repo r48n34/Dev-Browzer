@@ -103,17 +103,29 @@ describe('Dev Browzer workbench', () => {
       expect(surface).toHaveStyle({ width: '117px', height: '253px' });
     });
 
-    const handle = screen.getByRole('button', { name: 'Drag Phone portrait' });
-    const card = handle.closest('.preview-card');
+    const header = screen.getByTestId('preview-header-phone-portrait');
+    const card = header.closest('.preview-card');
     expect(card).not.toBeNull();
     expect(card).toHaveStyle({ left: '0px', top: '0px' });
 
-    fireEvent.pointerDown(handle, { pointerId: 7, clientX: 10, clientY: 10 });
+    fireEvent.pointerDown(header, { pointerId: 7, clientX: 10, clientY: 10 });
     fireEvent.pointerMove(window, { pointerId: 7, clientX: 130, clientY: 100 });
     fireEvent.pointerUp(window, { pointerId: 7, clientX: 130, clientY: 100 });
 
     await waitFor(() => {
       expect(card).toHaveStyle({ left: '120px', top: '90px' });
     });
+
+    const landscapeCard = screen
+      .getByTestId('preview-header-phone-landscape')
+      .closest('.preview-card');
+    expect(landscapeCard).not.toBeNull();
+    fireEvent.pointerDown(landscapeCard!);
+    expect(landscapeCard).toHaveAttribute('data-active', 'true');
+    expect(card).toHaveAttribute('data-active', 'false');
+
+    fireEvent.pointerDown(header, { pointerId: 8, clientX: 130, clientY: 100 });
+    expect(card).toHaveAttribute('data-active', 'true');
+    expect(landscapeCard).toHaveAttribute('data-active', 'false');
   });
 });

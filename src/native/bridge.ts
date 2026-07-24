@@ -9,6 +9,7 @@ import type {
 
 export const NAVIGATION_EVENT = 'devbrowzer://navigation';
 export const STATUS_EVENT = 'devbrowzer://status';
+export const ACTIVE_PREVIEW_EVENT = 'devbrowzer://active-preview';
 
 export function isTauriRuntime(): boolean {
   return '__TAURI_INTERNALS__' in window;
@@ -48,6 +49,10 @@ export async function openPreviewDevtools(id: string): Promise<void> {
   await invokeIfTauri('open_preview_devtools', { id });
 }
 
+export async function bringPreviewToFront(id: string): Promise<void> {
+  await invokeIfTauri('bring_preview_to_front', { id });
+}
+
 export async function setPreviewsVisible(visible: boolean): Promise<void> {
   await invokeIfTauri('set_previews_visible', { visible });
 }
@@ -76,4 +81,13 @@ export async function listenForPreviewStatus(
     return () => undefined;
   }
   return listen<PreviewStatusPayload>(STATUS_EVENT, (event) => listener(event.payload));
+}
+
+export async function listenForActivePreview(
+  listener: (viewportId: string) => void,
+): Promise<UnlistenFn> {
+  if (!isTauriRuntime()) {
+    return () => undefined;
+  }
+  return listen<string>(ACTIVE_PREVIEW_EVENT, (event) => listener(event.payload));
 }

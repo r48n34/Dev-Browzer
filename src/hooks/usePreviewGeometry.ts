@@ -1,9 +1,23 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { setPreviewLayout } from '../native/bridge';
-import type { PreviewLayout, ViewportDefinition } from '../types';
+import type { PreviewLayout, PreviewRectangle, ViewportDefinition } from '../types';
 
-export function usePreviewGeometry(viewports: ViewportDefinition[], previewsVisible: boolean) {
+function toPreviewRectangle(rect: DOMRect): PreviewRectangle {
+  return {
+    x: Math.round(rect.left),
+    y: Math.round(rect.top),
+    width: Math.max(1, Math.round(rect.width)),
+    height: Math.max(1, Math.round(rect.height)),
+  };
+}
+
+export function usePreviewGeometry(
+  viewports: ViewportDefinition[],
+  previewsVisible: boolean,
+  activeViewportId: string | null,
+) {
   const surfacesRef = useRef(new Map<string, HTMLElement>());
+  const cardsRef = useRef(new Map<string, HTMLElement>());
   const frameRef = useRef<number | null>(null);
 
   const measure = useCallback(() => {
@@ -13,6 +27,8 @@ export function usePreviewGeometry(viewports: ViewportDefinition[], previewsVisi
 
     frameRef.current = requestAnimationFrame(() => {
       frameRef.current = null;
+      const activeCard = activeViewportId ? cardsRef.current.get(activeViewportId) : null;
+      const occlusion = activeCard ? toPreviewRectangle(activeCard.getBoundingClientRect()) : null;
       const layouts: PreviewLayout[] = viewports.map((viewport) => {
         const element = surfacesRef.current.get(viewport.id);
         if (!element) {
@@ -53,12 +69,13 @@ export function usePreviewGeometry(viewports: ViewportDefinition[], previewsVisi
           viewportHeight: viewport.height,
           scale,
           visible,
+          occlusion: occlusion && viewport.id !== activeViewportId ? occlusion : undefined,
         };
       });
 
       void setPreviewLayout(layouts);
     });
-  }, [previewsVisible, viewports]);
+  }, [activeViewportId, previewsVisible, viewports]);
 
   const registerSurface = useCallback(
     (id: string) => (element: HTMLDivElement | null) => {
@@ -72,9 +89,24 @@ export function usePreviewGeometry(viewports: ViewportDefinition[], previewsVisi
     [measure],
   );
 
+  const registerCard = useCallback(
+    (id: string) => (element: HTMLDivElement | null) => {
+      if (element) {
+        cardsRef.current.set(id, element);
+      } else {
+        cardsRef.current.delete(id);
+      }
+      measure();
+    },
+    [measure],
+  );
+
   useEffect(() => {
     const observer = new ResizeObserver(measure);
     for (const element of surfacesRef.current.values()) {
+      observer.observe(element);
+    }
+    for (const element of cardsRef.current.values()) {
       observer.observe(element);
     }
     window.addEventListener('resize', measure);
@@ -98,9 +130,12 @@ export function usePreviewGeometry(viewports: ViewportDefinition[], previewsVisi
     for (const element of surfacesRef.current.values()) {
       observer.observe(element);
     }
+    for (const element of cardsRef.current.values()) {
+      observer.observe(element);
+    }
     measure();
     return () => observer.disconnect();
   }, [measure, viewports]);
 
-  return { registerSurface, measure };
+  return { registerCard, registerSurface, measure };
 }

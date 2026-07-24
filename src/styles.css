@@ -154,9 +154,15 @@ input {
 }
 
 .preview-card[data-dragging='true'] {
-  z-index: 5;
+  z-index: 3;
   cursor: grabbing;
   transition: none;
+}
+
+.preview-card[data-active='true'] {
+  z-index: 2;
+  border-color: color-mix(in srgb, var(--mantine-color-violet-5) 70%, transparent);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
 }
 
 .preview-card:hover {
@@ -168,12 +174,24 @@ input {
   min-height: 58px;
   padding: 9px 10px 9px 13px;
   border-bottom: 1px solid color-mix(in srgb, var(--mantine-color-default-border) 65%, transparent);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.preview-card[data-dragging='true'] .preview-card-header {
+  cursor: grabbing;
 }
 
 .preview-drag-handle {
+  display: inline-flex;
   flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  color: var(--mantine-color-dimmed);
   cursor: grab;
-  touch-action: none;
 }
 
 .preview-drag-handle:active {
