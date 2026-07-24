@@ -1,0 +1,10 @@
+node_modules
+dist
+coverage
+.codex-target
+.runtime-*
+.visual-*
+.smoke
+src-tauri/target
+src-tauri/gen
+yarn.lock

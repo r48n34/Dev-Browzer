@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dev Browzer Fixture</title>
+    <style>
+      :root {
+        font-family: system-ui, sans-serif;
+        color: #e9ecef;
+        background: #15171b;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: clamp(16px, 4vw, 48px);
+      }
+      main {
+        max-width: 900px;
+        margin: 0 auto;
+      }
+      .metrics {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 12px;
+        margin: 24px 0;
+      }
+      .card {
+        padding: 16px;
+        border: 1px solid #343a40;
+        border-radius: 12px;
+        background: #202328;
+      }
+      .value {
+        display: block;
+        margin-top: 6px;
+        color: #b197fc;
+        font-size: clamp(18px, 4vw, 34px);
+        font-weight: 750;
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+      button,
+      a {
+        display: inline-flex;
+        padding: 9px 13px;
+        color: white;
+        border: 1px solid #5f3dc4;
+        border-radius: 8px;
+        background: #5f3dc4;
+        text-decoration: none;
+        cursor: pointer;
+      }
+      code {
+        overflow-wrap: anywhere;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p>Development fixture</p>
+      <h1>Navigation and viewport probe</h1>
+      <div class="metrics">
+        <div class="card">
+          CSS viewport
+          <strong class="value" id="viewport"></strong>
+        </div>
+        <div class="card">
+          Device pixel ratio
+          <strong class="value" id="dpr"></strong>
+        </div>
+      </div>
+      <div class="card">
+        Current URL
+        <code class="value" id="url"></code>
+      </div>
+      <h2>Navigation cases</h2>
+      <div class="actions">
+        <a href="/document-page?via=link#result">Document link</a>
+        <a href="#fragment-result">Fragment link</a>
+        <a href="/new-window?via=blank" target="_blank">Target blank</a>
+        <button id="push">history.pushState</button>
+        <button id="replace">history.replaceState</button>
+        <button id="redirect">Client redirect</button>
+        <button id="back">history.back</button>
+      </div>
+    </main>
+    <script>
+      const render = () => {
+        document.querySelector('#viewport').textContent =
+          `${window.innerWidth} × ${window.innerHeight}`;
+        document.querySelector('#dpr').textContent = window.devicePixelRatio.toFixed(2);
+        document.querySelector('#url').textContent = window.location.href;
+      };
+
+      window.addEventListener('resize', render);
+      window.addEventListener('popstate', render);
+      window.addEventListener('hashchange', render);
+      document.querySelector('#push').addEventListener('click', () => {
+        history.pushState({}, '', `/spa-push?at=${Date.now()}#pushed`);
+        render();
+      });
+      document.querySelector('#replace').addEventListener('click', () => {
+        history.replaceState({}, '', `/spa-replace?at=${Date.now()}#replaced`);
+        render();
+      });
+      document.querySelector('#redirect').addEventListener('click', () => {
+        window.location.href = '/redirect-target?from=fixture';
+      });
+      document.querySelector('#back').addEventListener('click', () => history.back());
+      render();
+    </script>
+  </body>
+</html>
