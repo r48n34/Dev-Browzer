@@ -27,14 +27,10 @@ screens without constantly resizing a browser window. Open your local site once,
 
 ## Start previewing
 
-1. Start the website you want to check, such as your usual local development server.
-2. Open Dev Browzer and create a project.
-3. Give it a name and enter your site address, for example `localhost:3000`.
-4. Select the phone, tablet, and desktop sizes you want from the sidebar.
-5. Browse your site. With **Sync** on, the selected previews stay on the same page.
+1. Start application and create a project, give it a name and enter your site address, for example `localhost:3000`.
+2. Browse your site. With **Sync** on, the selected previews stay on the same page.
 
-Dev Browzer remembers your projects, addresses, enabled viewports, and preview layout, so your
-next review begins where the last one ended.
+Dev Browzer remembers your projects, addresses, enabled viewports, and preview layout, so your next review begins where the last one ended.
 
 ## Built-in screen sizes
 
