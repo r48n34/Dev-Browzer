@@ -63,8 +63,14 @@ function getEffectiveScale(
 }
 
 export function PreviewBoard({ previewsVisible, focusedId, onFocus }: PreviewBoardProps) {
-  const { activeProject, previewStatuses, setBoardScale, setPreviewLayout, setPreviewLayouts } =
-    useDevBrowzer();
+  const {
+    activeProject,
+    previewStatuses,
+    setBoardScale,
+    setPreviewLayout,
+    setPreviewLayouts,
+    toggleViewport,
+  } = useDevBrowzer();
   const [liveLayouts, setLiveLayouts] = useState<Record<string, PreviewBoardLayout>>({});
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -391,6 +397,24 @@ export function PreviewBoard({ previewsVisible, focusedId, onFocus }: PreviewBoa
                       {focused ? <IconArrowsMaximize size={15} /> : <IconFocus2 size={15} />}
                     </ActionIcon>
                   </Tooltip>
+                  <Tooltip
+                    label={
+                      allViewports.length === 1
+                        ? 'Keep at least one preview enabled'
+                        : 'Disable preview'
+                    }
+                  >
+                    <ActionIcon
+                      variant="subtle"
+                      color="red"
+                      size="sm"
+                      aria-label={`Disable ${viewport.name}`}
+                      disabled={allViewports.length === 1}
+                      onClick={() => toggleViewport(viewport.id)}
+                    >
+                      <IconX size={15} />
+                    </ActionIcon>
+                  </Tooltip>
                 </Group>
               </Group>
 
@@ -399,23 +423,15 @@ export function PreviewBoard({ previewsVisible, focusedId, onFocus }: PreviewBoa
                   Scale
                 </Text>
                 <Slider
+                  key={`${viewport.id}-${Math.round(scale * 100)}`}
                   thumbLabel={`${viewport.name} scale`}
                   min={25}
                   max={100}
                   step={5}
-                  value={Math.round(scale * 100)}
-                  onChange={(value) => {
-                    const layout = { ...current, scale: value / 100 };
-                    setLiveLayouts((layouts) => ({ ...layouts, [viewport.id]: layout }));
-                  }}
+                  defaultValue={Math.round(scale * 100)}
                   onChangeEnd={(value) => {
                     const layout = { ...current, scale: value / 100 };
                     setPreviewLayout(viewport.id, layout);
-                    setLiveLayouts((layouts) => {
-                      const next = { ...layouts };
-                      delete next[viewport.id];
-                      return next;
-                    });
                   }}
                   label={(value) => `${value}%`}
                   className="preview-scale-slider"

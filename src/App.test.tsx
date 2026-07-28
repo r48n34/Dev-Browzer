@@ -26,6 +26,11 @@ describe('Dev Browzer workbench', () => {
     expect(screen.getByTestId('preview-surface-phone-portrait')).toBeInTheDocument();
     expect(screen.getByTestId('preview-surface-desktop-2k')).toBeInTheDocument();
     expect(screen.queryByTestId('preview-surface-desktop-4k')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Disable Phone portrait' }));
+    expect(screen.getByText('5 viewports')).toBeInTheDocument();
+    expect(screen.queryByTestId('preview-surface-phone-portrait')).not.toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /Phone portrait/ })).not.toBeChecked();
   });
 
   it('normalizes address-bar navigation', async () => {

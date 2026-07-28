@@ -6,6 +6,7 @@
   "packageManager": "yarn@4.9.2",
   "scripts": {
     "dev": "vite",
+    "devs": "tauri dev",
     "build": "tsc -b && vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
