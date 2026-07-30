@@ -2,7 +2,6 @@
   <img src="src-tauri/icons/128x128@2x.png" alt="Dev Browzer app icon" width="128" />
 </p>
 
-
 # Dev Browzer
 
 **See your website at every important size, all at once.**
@@ -13,8 +12,6 @@
 
 Dev Browzer is a Windows desktop app for checking a site across phone, tablet, and desktop
 screens without constantly resizing a browser window. Open your local site once, then explore it side by side in synchronized previews.
-
-
 
 ## What you can do
 
