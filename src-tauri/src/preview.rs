@@ -1,7 +1,8 @@
 use std::{
     collections::{HashMap, HashSet},
-    sync::Mutex,
-    time::{Duration, Instant},
+    fs,
+    sync::{mpsc, Mutex},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
@@ -26,7 +27,7 @@ const MAX_SCALE: f64 = 1.0;
 const TOOLBAR_ORIGIN: &str = "__toolbar__";
 const POPUP_ORIGIN: &str = "__popup__";
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PreviewSpec {
     id: String,
@@ -34,6 +35,18 @@ pub struct PreviewSpec {
     name: String,
     width: u32,
     height: u32,
+    device_profile: PreviewDeviceProfile,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct PreviewDeviceProfile {
+    device_pixel_ratio: f64,
+    user_agent: String,
+    touch_enabled: bool,
+    color_scheme: String,
+    network_profile: String,
+    reduced_motion: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -76,6 +89,33 @@ struct StatusPayload {
     message: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewCapture {
+    id: String,
+    path: String,
+    width: u32,
+    height: u32,
+    captured_at: u128,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureSession {
+    name: String,
+    captures: Vec<PreviewCaptureInput>,
+    annotations: HashMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PreviewCaptureInput {
+    id: String,
+    path: String,
+    width: u32,
+    height: u32,
+}
+
 #[derive(Default)]
 pub struct PreviewCoordinator {
     inner: Mutex<CoordinatorState>,
@@ -84,6 +124,7 @@ pub struct PreviewCoordinator {
 #[derive(Debug)]
 struct CoordinatorState {
     preview_ids: HashSet<String>,
+    preview_specs: HashMap<String, PreviewSpec>,
     canonical_url: Option<String>,
     epoch: u64,
     sync_enabled: bool,
@@ -100,6 +141,7 @@ impl Default for CoordinatorState {
     fn default() -> Self {
         Self {
             preview_ids: HashSet::new(),
+            preview_specs: HashMap::new(),
             canonical_url: None,
             epoch: 0,
             sync_enabled: true,
@@ -206,14 +248,23 @@ impl PreviewCoordinator {
         }
     }
 
-    fn set_preview_ids(&self, ids: HashSet<String>, canonical_url: String) {
+    fn set_previews(&self, previews: &[PreviewSpec], canonical_url: String) {
         let mut state = self
             .inner
             .lock()
             .expect("preview coordinator lock poisoned");
+        let ids = previews
+            .iter()
+            .map(|preview| preview.id.clone())
+            .collect::<HashSet<_>>();
         state.layout_visibility.retain(|id, _| ids.contains(id));
         state.failed_previews.retain(|id| ids.contains(id));
         state.preview_ids = ids;
+        state.preview_specs = previews
+            .iter()
+            .cloned()
+            .map(|preview| (preview.id.clone(), preview))
+            .collect();
         state.canonical_url = Some(canonical_url);
         state.epoch += 1;
         state.transaction_origin = Some(TOOLBAR_ORIGIN.to_owned());
@@ -258,12 +309,13 @@ pub async fn reconcile_previews(
     validate_preview_specs(&previews)?;
 
     let desired_ids: HashSet<String> = previews.iter().map(|preview| preview.id.clone()).collect();
-    let current_ids = coordinator
-        .inner
-        .lock()
-        .map_err(|_| "Unable to access preview state.".to_owned())?
-        .preview_ids
-        .clone();
+    let (current_ids, current_specs) = {
+        let state = coordinator
+            .inner
+            .lock()
+            .map_err(|_| "Unable to access preview state.".to_owned())?;
+        (state.preview_ids.clone(), state.preview_specs.clone())
+    };
 
     for removed_id in current_ids.difference(&desired_ids) {
         if let Some(preview) = app.get_webview(&preview_label(removed_id)) {
@@ -271,7 +323,18 @@ pub async fn reconcile_previews(
         }
     }
 
-    coordinator.set_preview_ids(desired_ids.clone(), canonical_url.clone());
+    for preview in &previews {
+        if current_specs
+            .get(&preview.id)
+            .is_some_and(|current| current != preview)
+        {
+            if let Some(existing) = app.get_webview(&preview_label(&preview.id)) {
+                let _ = existing.close();
+            }
+        }
+    }
+
+    coordinator.set_previews(&previews, canonical_url.clone());
 
     let parent = app
         .get_window("main")
@@ -293,8 +356,9 @@ pub async fn reconcile_previews(
         let popup_source_id = source_id.clone();
         let status_source_id = source_id.clone();
         let script = navigation_observer_script();
+        let device_profile = preview_spec.device_profile.clone();
 
-        let builder = WebviewBuilder::new(&label, WebviewUrl::External(parsed_url.clone()))
+        let mut builder = WebviewBuilder::new(&label, WebviewUrl::External(parsed_url.clone()))
             .devtools(true)
             .zoom_hotkeys_enabled(false)
             .initialization_script(script)
@@ -325,6 +389,9 @@ pub async fn reconcile_previews(
                     emit_status(&status_app, &status_source_id, "ready", None);
                 }
             });
+        if !device_profile.user_agent.trim().is_empty() {
+            builder = builder.user_agent(device_profile.user_agent.trim());
+        }
 
         let child = parent
             .add_child(
@@ -335,6 +402,7 @@ pub async fn reconcile_previews(
             .map_err(|error| format!("Unable to create preview {}: {error}", preview_spec.id))?;
         let _ = child.hide();
         install_native_navigation_observers(&child, app.clone(), preview_spec.id.clone())?;
+        apply_device_profile(&child, &preview_spec)?;
     }
 
     navigate_targets(
@@ -603,6 +671,78 @@ fn ensure_main_caller(webview: &Webview) -> Result<(), String> {
     Ok(())
 }
 
+fn unix_millis() -> Result<u128, String> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .map_err(|error| error.to_string())
+}
+
+fn escape_html(input: &str) -> String {
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+#[cfg(windows)]
+fn capture_preview_png(preview: &Webview) -> Result<Vec<u8>, String> {
+    use webview2_com::CallDevToolsProtocolMethodCompletedHandler;
+    use windows::core::HSTRING;
+
+    let (sender, receiver) = mpsc::channel::<Result<String, String>>();
+    preview
+        .with_webview(move |platform_webview| unsafe {
+            let Ok(core_webview) = platform_webview.controller().CoreWebView2() else {
+                let _ = sender.send(Err("Unable to access the WebView2 capture API.".to_owned()));
+                return;
+            };
+            let method = HSTRING::from("Page.captureScreenshot");
+            let parameters = HSTRING::from(
+                serde_json::json!({
+                    "format": "png",
+                    "fromSurface": true,
+                    "captureBeyondViewport": false
+                })
+                .to_string(),
+            );
+            let callback_sender = sender.clone();
+            let handler = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(
+                move |result, response| {
+                    let payload = result
+                        .map(|_| response)
+                        .map_err(|error| format!("Unable to capture preview: {error}"));
+                    let _ = callback_sender.send(payload);
+                    Ok(())
+                },
+            ));
+            if let Err(error) =
+                core_webview.CallDevToolsProtocolMethod(&method, &parameters, &handler)
+            {
+                let _ = sender.send(Err(format!("Unable to capture preview: {error}")));
+            }
+        })
+        .map_err(|error| error.to_string())?;
+
+    let response = receiver
+        .recv_timeout(Duration::from_secs(15))
+        .map_err(|_| "Timed out while capturing the preview.".to_owned())??;
+    let payload: serde_json::Value =
+        serde_json::from_str(&response).map_err(|error| error.to_string())?;
+    let encoded = payload
+        .get("data")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "WebView2 returned an invalid screenshot.".to_owned())?;
+    BASE64.decode(encoded).map_err(|error| error.to_string())
+}
+
+#[cfg(not(windows))]
+fn capture_preview_png(_preview: &Webview) -> Result<Vec<u8>, String> {
+    Err("Preview capture is currently available on Windows only.".to_owned())
+}
+
 fn validate_preview_url(input: &str) -> Result<String, String> {
     let parsed = Url::parse(input).map_err(|_| "Enter a valid HTTP(S) address.".to_owned())?;
     if !is_allowed_url(&parsed) {
@@ -634,6 +774,33 @@ fn validate_preview_specs(previews: &[PreviewSpec]) -> Result<(), String> {
         {
             return Err(format!(
                 "Preview {} must be between {MIN_VIEWPORT_SIZE} and {MAX_VIEWPORT_SIZE} pixels.",
+                preview.id
+            ));
+        }
+        let profile = &preview.device_profile;
+        if !profile.device_pixel_ratio.is_finite()
+            || !(0.5..=4.0).contains(&profile.device_pixel_ratio)
+        {
+            return Err(format!(
+                "Preview {} has an invalid device pixel ratio.",
+                preview.id
+            ));
+        }
+        if profile.user_agent.len() > 512 {
+            return Err(format!("Preview {} has an invalid user agent.", preview.id));
+        }
+        if !matches!(profile.color_scheme.as_str(), "system" | "light" | "dark") {
+            return Err(format!(
+                "Preview {} has an invalid color scheme.",
+                preview.id
+            ));
+        }
+        if !matches!(
+            profile.network_profile.as_str(),
+            "online" | "fast-3g" | "slow-3g" | "offline"
+        ) {
+            return Err(format!(
+                "Preview {} has an invalid network profile.",
                 preview.id
             ));
         }
@@ -703,6 +870,229 @@ fn navigation_observer_script() -> String {
     )
 }
 
+#[cfg(windows)]
+fn call_devtools_method(preview: &Webview, method: &str, parameters: serde_json::Value) {
+    use webview2_com::CallDevToolsProtocolMethodCompletedHandler;
+    use windows::core::HSTRING;
+
+    let method = method.to_owned();
+    let parameters = parameters.to_string();
+    let _ = preview.with_webview(move |platform_webview| unsafe {
+        let Ok(core_webview) = platform_webview.controller().CoreWebView2() else {
+            return;
+        };
+        let method = HSTRING::from(method);
+        let parameters = HSTRING::from(parameters);
+        let handler = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(|_, _| Ok(())));
+        let _ = core_webview.CallDevToolsProtocolMethod(&method, &parameters, &handler);
+    });
+}
+
+#[cfg(windows)]
+fn apply_device_profile(preview: &Webview, spec: &PreviewSpec) -> Result<(), String> {
+    let profile = &spec.device_profile;
+    if (profile.device_pixel_ratio - 1.0).abs() >= f64::EPSILON {
+        call_devtools_method(
+            preview,
+            "Emulation.setDeviceMetricsOverride",
+            serde_json::json!({
+                // Width and height must remain zero so WebView2 derives the CSS viewport from
+                // SetBoundsAndZoomFactor. A fixed emulated size is divided by the board zoom.
+                "width": 0,
+                "height": 0,
+                "deviceScaleFactor": profile.device_pixel_ratio,
+                "mobile": false
+            }),
+        );
+    }
+    call_devtools_method(
+        preview,
+        "Emulation.setTouchEmulationEnabled",
+        serde_json::json!({
+            "enabled": profile.touch_enabled,
+            "maxTouchPoints": if profile.touch_enabled { 5 } else { 1 }
+        }),
+    );
+
+    let mut media_features = Vec::new();
+    if profile.color_scheme != "system" {
+        media_features.push(serde_json::json!({
+            "name": "prefers-color-scheme",
+            "value": profile.color_scheme
+        }));
+    }
+    if profile.reduced_motion {
+        media_features.push(serde_json::json!({
+            "name": "prefers-reduced-motion",
+            "value": "reduce"
+        }));
+    }
+    call_devtools_method(
+        preview,
+        "Emulation.setEmulatedMedia",
+        serde_json::json!({ "features": media_features }),
+    );
+
+    call_devtools_method(preview, "Network.enable", serde_json::json!({}));
+    let (offline, latency, download, upload, connection_type) =
+        match profile.network_profile.as_str() {
+            "fast-3g" => (false, 150, 200_000, 93_750, "cellular3g"),
+            "slow-3g" => (false, 400, 50_000, 50_000, "cellular3g"),
+            "offline" => (true, 0, 0, 0, "none"),
+            _ => (false, 0, -1, -1, "none"),
+        };
+    call_devtools_method(
+        preview,
+        "Network.emulateNetworkConditions",
+        serde_json::json!({
+            "offline": offline,
+            "latency": latency,
+            "downloadThroughput": download,
+            "uploadThroughput": upload,
+            "connectionType": connection_type
+        }),
+    );
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn capture_previews(
+    webview: Webview,
+    app: AppHandle,
+    coordinator: State<'_, PreviewCoordinator>,
+    ids: Vec<String>,
+) -> Result<Vec<PreviewCapture>, String> {
+    ensure_main_caller(&webview)?;
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let specs = coordinator
+        .inner
+        .lock()
+        .map_err(|_| "Unable to access preview state.".to_owned())?
+        .preview_specs
+        .clone();
+    let captured_at = unix_millis()?;
+    let capture_directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("captures")
+        .join(captured_at.to_string());
+    fs::create_dir_all(&capture_directory).map_err(|error| error.to_string())?;
+
+    let mut captures = Vec::new();
+    for id in ids {
+        if !is_valid_preview_id(&id) {
+            return Err(format!("Invalid preview identifier: {id}"));
+        }
+        let spec = specs
+            .get(&id)
+            .ok_or_else(|| format!("Preview {id} does not exist."))?;
+        let preview = app
+            .get_webview(&preview_label(&id))
+            .ok_or_else(|| format!("Preview {id} does not exist."))?;
+        let png = capture_preview_png(&preview)?;
+        let path = capture_directory.join(format!("{id}.png"));
+        fs::write(&path, png).map_err(|error| error.to_string())?;
+        captures.push(PreviewCapture {
+            id,
+            path: path.to_string_lossy().to_string(),
+            width: spec.width,
+            height: spec.height,
+            captured_at,
+        });
+    }
+
+    Ok(captures)
+}
+
+#[tauri::command]
+pub async fn export_capture_report(
+    webview: Webview,
+    app: AppHandle,
+    project_name: String,
+    sessions: Vec<CaptureSession>,
+) -> Result<String, String> {
+    ensure_main_caller(&webview)?;
+    if sessions.is_empty() {
+        return Err("Capture at least one preview set before exporting a report.".to_owned());
+    }
+
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    let capture_root = app_data.join("captures");
+    let canonical_capture_root = capture_root
+        .canonicalize()
+        .map_err(|_| "The capture directory is unavailable.".to_owned())?;
+    let report_directory = app_data.join("reports");
+    fs::create_dir_all(&report_directory).map_err(|error| error.to_string())?;
+
+    let mut html = String::from(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" \
+         content=\"width=device-width\"><title>Dev Browzer review</title><style>\
+         body{font:15px system-ui;margin:32px;color:#202124;background:#f6f7f9}\
+         main{max-width:1200px;margin:auto}section,article{background:white;border:1px solid \
+         #dfe1e5;border-radius:12px;padding:20px;margin:16px 0}img{max-width:100%;height:auto;\
+         border:1px solid #dfe1e5}.meta{color:#687078;font-size:13px}.note{white-space:pre-wrap;\
+         padding:12px;background:#f4f1ff;border-radius:8px}</style></head><body><main>",
+    );
+    html.push_str("<h1>");
+    html.push_str(&escape_html(&project_name));
+    html.push_str(" responsive review</h1>");
+
+    for session in sessions {
+        html.push_str("<section><h2>");
+        html.push_str(&escape_html(&session.name));
+        html.push_str("</h2>");
+        for capture in session.captures {
+            if !is_valid_preview_id(&capture.id) {
+                continue;
+            }
+            let path = std::path::PathBuf::from(&capture.path);
+            let Ok(canonical_path) = path.canonicalize() else {
+                continue;
+            };
+            if !canonical_path.starts_with(&canonical_capture_root) {
+                continue;
+            }
+            let image = fs::read(&canonical_path).map_err(|error| error.to_string())?;
+            let encoded = BASE64.encode(image);
+            html.push_str("<article><h3>");
+            html.push_str(&escape_html(&capture.id));
+            html.push_str("</h3><p class=\"meta\">");
+            html.push_str(&format!("{} × {}", capture.width, capture.height));
+            html.push_str("</p><img alt=\"");
+            html.push_str(&escape_html(&capture.id));
+            html.push_str("\" src=\"data:image/png;base64,");
+            html.push_str(&encoded);
+            html.push_str("\">");
+            if let Some(note) = session.annotations.get(&capture.id) {
+                if !note.trim().is_empty() {
+                    html.push_str("<p class=\"note\">");
+                    html.push_str(&escape_html(note));
+                    html.push_str("</p>");
+                }
+            }
+            html.push_str("</article>");
+        }
+        html.push_str("</section>");
+    }
+    html.push_str("</main></body></html>");
+
+    let report_path = report_directory.join(format!("review-{}.html", unix_millis()?));
+    fs::write(&report_path, html).map_err(|error| error.to_string())?;
+    Ok(report_path.to_string_lossy().to_string())
+}
+
+#[cfg(not(windows))]
+fn apply_device_profile(_preview: &Webview, _spec: &PreviewSpec) -> Result<(), String> {
+    Ok(())
+}
+
 #[derive(Debug, PartialEq)]
 struct PhysicalBounds {
     left: i32,
@@ -755,17 +1145,19 @@ fn calculate_native_geometry(layout: &PreviewLayout, density: f64) -> NativeGeom
                 continue;
             }
 
-            let width_low = width as f64 / (density * (layout.viewport_width as f64 + 1.0));
-            let width_high = width as f64 / (density * layout.viewport_width as f64);
-            let height_low = height as f64 / (density * (layout.viewport_height as f64 + 1.0));
-            let height_high = height as f64 / (density * layout.viewport_height as f64);
+            let width_low = width as f64 / (density * layout.viewport_width as f64);
+            let width_high =
+                width as f64 / (density * layout.viewport_width.saturating_sub(1).max(1) as f64);
+            let height_low = height as f64 / (density * layout.viewport_height as f64);
+            let height_high =
+                height as f64 / (density * layout.viewport_height.saturating_sub(1).max(1) as f64);
             let low = width_low.max(height_low);
             let high = width_high.min(height_high);
             if low >= high {
                 continue;
             }
 
-            let zoom_factor = if requested_scale > low && requested_scale <= high {
+            let zoom_factor = if requested_scale >= low && requested_scale < high {
                 requested_scale
             } else {
                 (low + high) / 2.0
@@ -826,7 +1218,9 @@ fn set_preview_bounds_and_zoom(
     preview
         .with_webview(move |platform_webview| unsafe {
             let controller = platform_webview.controller();
-            let _ = controller.SetBoundsAndZoomFactor(bounds, geometry.zoom_factor);
+            if let Err(error) = controller.SetBoundsAndZoomFactor(bounds, geometry.zoom_factor) {
+                eprintln!("SetBoundsAndZoomFactor failed: {error}");
+            }
             let _ = apply_controller_occlusion(
                 &controller,
                 geometry.width(),
@@ -1200,16 +1594,35 @@ fn install_native_navigation_observers(
 mod tests {
     use super::*;
 
+    fn default_profile() -> PreviewDeviceProfile {
+        PreviewDeviceProfile {
+            device_pixel_ratio: 1.0,
+            user_agent: String::new(),
+            touch_enabled: false,
+            color_scheme: "system".into(),
+            network_profile: "online".into(),
+            reduced_motion: false,
+        }
+    }
+
+    fn preview_spec(id: &str) -> PreviewSpec {
+        PreviewSpec {
+            id: id.into(),
+            name: id.into(),
+            width: 390,
+            height: 844,
+            device_profile: default_profile(),
+        }
+    }
+
     fn coordinator_with_ids() -> PreviewCoordinator {
         let coordinator = PreviewCoordinator::default();
-        coordinator.set_preview_ids(
-            [
-                "phone".to_owned(),
-                "tablet".to_owned(),
-                "desktop".to_owned(),
-            ]
-            .into_iter()
-            .collect(),
+        coordinator.set_previews(
+            &[
+                preview_spec("phone"),
+                preview_spec("tablet"),
+                preview_spec("desktop"),
+            ],
             "http://localhost/".to_owned(),
         );
         coordinator
@@ -1248,6 +1661,7 @@ mod tests {
             name: "Phone".into(),
             width: 390,
             height: 844,
+            device_profile: default_profile(),
         };
         assert!(validate_preview_specs(&[valid]).is_ok());
 
@@ -1256,8 +1670,18 @@ mod tests {
             name: "Invalid".into(),
             width: 100,
             height: 100,
+            device_profile: default_profile(),
         };
         assert!(validate_preview_specs(&[invalid]).is_err());
+
+        let invalid_profile = PreviewSpec {
+            device_profile: PreviewDeviceProfile {
+                device_pixel_ratio: 8.0,
+                ..default_profile()
+            },
+            ..preview_spec("invalid-profile")
+        };
+        assert!(validate_preview_specs(&[invalid_profile]).is_err());
     }
 
     #[test]
@@ -1349,10 +1773,7 @@ mod tests {
             state.layout_visibility.insert("removed".into(), true);
             state.failed_previews.insert("removed".into());
         }
-        coordinator.set_preview_ids(
-            ["phone".to_owned()].into_iter().collect(),
-            "http://localhost/".to_owned(),
-        );
+        coordinator.set_previews(&[preview_spec("phone")], "http://localhost/".to_owned());
 
         let state = coordinator.inner.lock().unwrap();
         assert!(!state.layout_visibility.contains_key("removed"));
@@ -1374,29 +1795,31 @@ mod tests {
             visible: true,
             occlusion: None,
         };
-        let geometry = calculate_native_geometry(&layout, 1.0);
-        let native_width = geometry.bounds.right - geometry.bounds.left;
-        let native_height = geometry.bounds.bottom - geometry.bounds.top;
+        for density in [1.0, 1.25, 1.5] {
+            let geometry = calculate_native_geometry(&layout, density);
+            let native_width = geometry.bounds.right - geometry.bounds.left;
+            let native_height = geometry.bounds.bottom - geometry.bounds.top;
 
-        assert_eq!(
-            (f64::from(native_width) / geometry.zoom_factor).floor(),
-            390.0
-        );
-        assert_eq!(
-            (f64::from(native_height) / geometry.zoom_factor).floor(),
-            844.0
-        );
-        assert!((native_width - 98).abs() <= 1);
-        assert!((native_height - 211).abs() <= 1);
-        assert_eq!(
-            geometry.controller_bounds(),
-            PhysicalBounds {
-                left: 0,
-                top: 0,
-                right: native_width,
-                bottom: native_height,
-            }
-        );
+            assert_eq!(
+                (f64::from(native_width) / (density * geometry.zoom_factor)).ceil(),
+                390.0
+            );
+            assert_eq!(
+                (f64::from(native_height) / (density * geometry.zoom_factor)).ceil(),
+                844.0
+            );
+            assert!((native_width - (98.0 * density).round() as i32).abs() <= 1);
+            assert!((native_height - (211.0 * density).round() as i32).abs() <= 1);
+            assert_eq!(
+                geometry.controller_bounds(),
+                PhysicalBounds {
+                    left: 0,
+                    top: 0,
+                    right: native_width,
+                    bottom: native_height,
+                }
+            );
+        }
     }
 
     #[cfg(windows)]
@@ -1448,5 +1871,13 @@ mod tests {
             "http://localhost:4173/spa?x=1#result"
         );
         assert!(decode_navigation_title("Normal page title").is_none());
+    }
+
+    #[test]
+    fn escapes_capture_report_content() {
+        assert_eq!(
+            escape_html("<script>'review' & \"capture\"</script>"),
+            "&lt;script&gt;&#39;review&#39; &amp; &quot;capture&quot;&lt;/script&gt;"
+        );
     }
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { getProjectViewports } from '../config/viewports';
+import { getPreviewDeviceProfile, getProjectViewports } from '../config/viewports';
 import {
   closePreviews,
   listenForPreviewNavigation,
@@ -13,17 +13,26 @@ import type {
   NavigationHistory,
   PersistedAppState,
   PreviewBoardLayout,
+  PreviewDeviceProfile,
   PreviewStatusPayload,
   ProjectWorkspace,
+  SavedRoute,
   ViewportDefinition,
+  WorkspacePreset,
 } from '../types';
+import { MIN_BOARD_SCALE } from '../types';
 import {
   canMoveHistory,
   createNavigationHistory,
   moveNavigationHistory,
   pushNavigationHistory,
 } from '../utils/history';
-import { addRecentUrl, createEmptyPersistedState, createProjectWorkspace } from '../utils/project';
+import {
+  addRecentUrl,
+  createEmptyPersistedState,
+  createProjectWorkspace,
+  duplicateProjectWorkspace,
+} from '../utils/project';
 import { normalizePreviewUrl } from '../utils/url';
 import { clampBoardScale } from '../utils/viewport';
 import { DevBrowzerContext, type DevBrowzerContextValue } from './context';
@@ -94,12 +103,19 @@ export function DevBrowzerProvider({ children }: DevBrowzerProviderProps) {
     );
     void setNavigationSync(activeProject.syncNavigation);
     void reconcilePreviews(
-      viewports.map(({ id, name, width, height }) => ({ id, name, width, height })),
+      viewports.map(({ id, name, width, height }) => ({
+        id,
+        name,
+        width,
+        height,
+        deviceProfile: getPreviewDeviceProfile(activeProject.deviceProfiles, id),
+      })),
       activeProject.currentUrl,
     );
   }, [
     activeProject?.currentUrl,
     activeProject?.customViewports,
+    activeProject?.deviceProfiles,
     activeProject?.enabledViewportIds,
     activeProject?.id,
     activeProject?.syncNavigation,
@@ -175,8 +191,11 @@ export function DevBrowzerProvider({ children }: DevBrowzerProviderProps) {
     [],
   );
 
-  const createProject = useCallback((name: string, rawUrl: string) => {
+  const createProject = useCallback((name: string, rawUrl: string, viewportIds?: string[]) => {
     const project = createProjectWorkspace(name, normalizePreviewUrl(rawUrl));
+    if (viewportIds?.length) {
+      project.enabledViewportIds = [...viewportIds];
+    }
     setState((current) => ({
       ...current,
       projects: [...current.projects, project],
@@ -185,6 +204,23 @@ export function DevBrowzerProvider({ children }: DevBrowzerProviderProps) {
     }));
     setNavigationHistory(createNavigationHistory(project.currentUrl));
     return project;
+  }, []);
+
+  const duplicateProject = useCallback((projectId: string) => {
+    setState((current) => {
+      const source = current.projects.find((project) => project.id === projectId);
+      if (!source) {
+        return current;
+      }
+      const project = duplicateProjectWorkspace(source);
+      setNavigationHistory(createNavigationHistory(project.currentUrl));
+      return {
+        ...current,
+        projects: [...current.projects, project],
+        activeProjectId: project.id,
+        recentUrls: addRecentUrl(current.recentUrls, project.currentUrl, project.id),
+      };
+    });
   }, []);
 
   const updateProject = useCallback((projectId: string, patch: Partial<ProjectWorkspace>) => {
@@ -282,11 +318,47 @@ export function DevBrowzerProvider({ children }: DevBrowzerProviderProps) {
     [activeProject, updateProject],
   );
 
+  const setEnabledViewportIds = useCallback(
+    (viewportIds: string[]) => {
+      if (!activeProject) {
+        return;
+      }
+      const uniqueIds = [...new Set(viewportIds)];
+      if (uniqueIds.length === 0) {
+        return;
+      }
+      updateProject(activeProject.id, { enabledViewportIds: uniqueIds });
+    },
+    [activeProject, updateProject],
+  );
+
   const addCustomViewport = useCallback(
     (viewport: ViewportDefinition) => {
       if (!activeProject) {
         return;
       }
+      updateProject(activeProject.id, {
+        customViewports: [...activeProject.customViewports, viewport],
+        enabledViewportIds: [...activeProject.enabledViewportIds, viewport.id],
+      });
+    },
+    [activeProject, updateProject],
+  );
+
+  const duplicateCustomViewport = useCallback(
+    (viewportId: string) => {
+      if (!activeProject) {
+        return;
+      }
+      const source = activeProject.customViewports.find((viewport) => viewport.id === viewportId);
+      if (!source) {
+        return;
+      }
+      const viewport: ViewportDefinition = {
+        ...source,
+        id: crypto.randomUUID(),
+        name: `${source.name} copy`,
+      };
       updateProject(activeProject.id, {
         customViewports: [...activeProject.customViewports, viewport],
         enabledViewportIds: [...activeProject.enabledViewportIds, viewport.id],
@@ -323,6 +395,148 @@ export function DevBrowzerProvider({ children }: DevBrowzerProviderProps) {
           Object.entries(activeProject.previewLayouts).filter(([id]) => id !== viewportId),
         ),
       });
+    },
+    [activeProject, updateProject],
+  );
+
+  const addSavedRoute = useCallback(
+    (name: string, rawUrl: string): SavedRoute | null => {
+      if (!activeProject) {
+        return null;
+      }
+      const route = {
+        id: crypto.randomUUID(),
+        name: name.trim(),
+        url: normalizePreviewUrl(rawUrl),
+      };
+      updateProject(activeProject.id, { savedRoutes: [...activeProject.savedRoutes, route] });
+      return route;
+    },
+    [activeProject, updateProject],
+  );
+
+  const updateSavedRoute = useCallback(
+    (route: SavedRoute) => {
+      if (!activeProject) {
+        return;
+      }
+      updateProject(activeProject.id, {
+        savedRoutes: activeProject.savedRoutes.map((item) =>
+          item.id === route.id
+            ? { ...route, name: route.name.trim(), url: normalizePreviewUrl(route.url) }
+            : item,
+        ),
+      });
+    },
+    [activeProject, updateProject],
+  );
+
+  const removeSavedRoute = useCallback(
+    (routeId: string) => {
+      if (activeProject) {
+        updateProject(activeProject.id, {
+          savedRoutes: activeProject.savedRoutes.filter((route) => route.id !== routeId),
+        });
+      }
+    },
+    [activeProject, updateProject],
+  );
+
+  const moveSavedRoute = useCallback(
+    (routeId: string, direction: -1 | 1) => {
+      if (!activeProject) {
+        return;
+      }
+      const currentIndex = activeProject.savedRoutes.findIndex((route) => route.id === routeId);
+      const nextIndex = currentIndex + direction;
+      if (currentIndex < 0 || nextIndex < 0 || nextIndex >= activeProject.savedRoutes.length) {
+        return;
+      }
+      const savedRoutes = [...activeProject.savedRoutes];
+      const [route] = savedRoutes.splice(currentIndex, 1);
+      savedRoutes.splice(nextIndex, 0, route);
+      updateProject(activeProject.id, { savedRoutes });
+    },
+    [activeProject, updateProject],
+  );
+
+  const reorderSavedRoute = useCallback(
+    (sourceId: string, targetId: string) => {
+      if (!activeProject || sourceId === targetId) {
+        return;
+      }
+      const sourceIndex = activeProject.savedRoutes.findIndex((route) => route.id === sourceId);
+      const targetIndex = activeProject.savedRoutes.findIndex((route) => route.id === targetId);
+      if (sourceIndex < 0 || targetIndex < 0) {
+        return;
+      }
+      const savedRoutes = [...activeProject.savedRoutes];
+      const [route] = savedRoutes.splice(sourceIndex, 1);
+      savedRoutes.splice(targetIndex, 0, route);
+      updateProject(activeProject.id, { savedRoutes });
+    },
+    [activeProject, updateProject],
+  );
+
+  const saveWorkspacePreset = useCallback(
+    (name: string): WorkspacePreset | null => {
+      if (!activeProject) {
+        return null;
+      }
+      const preset: WorkspacePreset = {
+        id: crypto.randomUUID(),
+        name: name.trim(),
+        enabledViewportIds: [...activeProject.enabledViewportIds],
+        boardScale: activeProject.boardScale,
+        previewLayouts: { ...activeProject.previewLayouts },
+        createdAt: new Date().toISOString(),
+      };
+      updateProject(activeProject.id, {
+        workspacePresets: [...activeProject.workspacePresets, preset],
+      });
+      return preset;
+    },
+    [activeProject, updateProject],
+  );
+
+  const applyWorkspacePreset = useCallback(
+    (presetId: string) => {
+      if (!activeProject) {
+        return;
+      }
+      const preset = activeProject.workspacePresets.find((item) => item.id === presetId);
+      if (!preset || preset.enabledViewportIds.length === 0) {
+        return;
+      }
+      updateProject(activeProject.id, {
+        enabledViewportIds: [...preset.enabledViewportIds],
+        boardScale: clampBoardScale(preset.boardScale),
+        previewLayouts: { ...preset.previewLayouts },
+      });
+    },
+    [activeProject, updateProject],
+  );
+
+  const removeWorkspacePreset = useCallback(
+    (presetId: string) => {
+      if (activeProject) {
+        updateProject(activeProject.id, {
+          workspacePresets: activeProject.workspacePresets.filter(
+            (preset) => preset.id !== presetId,
+          ),
+        });
+      }
+    },
+    [activeProject, updateProject],
+  );
+
+  const setDeviceProfile = useCallback(
+    (viewportId: string, profile: PreviewDeviceProfile) => {
+      if (activeProject) {
+        updateProject(activeProject.id, {
+          deviceProfiles: { ...activeProject.deviceProfiles, [viewportId]: profile },
+        });
+      }
     },
     [activeProject, updateProject],
   );
@@ -372,6 +586,15 @@ export function DevBrowzerProvider({ children }: DevBrowzerProviderProps) {
     [activeProject, updateProject],
   );
 
+  const resetPreviewLayouts = useCallback(() => {
+    if (activeProject) {
+      updateProject(activeProject.id, {
+        boardScale: MIN_BOARD_SCALE,
+        previewLayouts: {},
+      });
+    }
+  }, [activeProject, updateProject]);
+
   const setSyncNavigation = useCallback(
     (enabled: boolean) => {
       if (activeProject) {
@@ -390,33 +613,58 @@ export function DevBrowzerProvider({ children }: DevBrowzerProviderProps) {
       previewStatuses,
       initialized,
       createProject,
+      duplicateProject,
       updateProject,
       deleteProject,
       selectProject,
       navigate,
       moveHistory,
       toggleViewport,
+      setEnabledViewportIds,
       addCustomViewport,
+      duplicateCustomViewport,
       updateCustomViewport,
       removeCustomViewport,
+      addSavedRoute,
+      updateSavedRoute,
+      removeSavedRoute,
+      moveSavedRoute,
+      reorderSavedRoute,
+      saveWorkspacePreset,
+      applyWorkspacePreset,
+      removeWorkspacePreset,
+      setDeviceProfile,
       setBoardScale,
       setPreviewLayout,
       setPreviewLayouts,
+      resetPreviewLayouts,
       setSyncNavigation,
     }),
     [
       activeProject,
       addCustomViewport,
+      addSavedRoute,
+      applyWorkspacePreset,
       createProject,
       deleteProject,
+      duplicateCustomViewport,
+      duplicateProject,
       initialized,
       moveHistory,
+      moveSavedRoute,
       navigate,
       navigationHistory,
       previewStatuses,
+      reorderSavedRoute,
+      removeSavedRoute,
       removeCustomViewport,
+      removeWorkspacePreset,
+      resetPreviewLayouts,
+      saveWorkspacePreset,
       selectProject,
       setBoardScale,
+      setDeviceProfile,
+      setEnabledViewportIds,
       setPreviewLayout,
       setPreviewLayouts,
       setSyncNavigation,
@@ -424,6 +672,7 @@ export function DevBrowzerProvider({ children }: DevBrowzerProviderProps) {
       toggleViewport,
       updateCustomViewport,
       updateProject,
+      updateSavedRoute,
     ],
   );
 

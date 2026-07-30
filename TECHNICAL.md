@@ -69,5 +69,15 @@ Only `http:` and `https:` preview URLs are accepted by the React shell and Rust 
 bundled main shell is the only webview granted Tauri capabilities; remote preview webviews cannot
 call Store or native commands.
 
-Project state includes saved projects, current addresses, viewports, preview layouts, and recent
-URLs. It is stored locally.
+Project state uses schema version 3 and includes saved projects, current addresses, saved routes,
+workspace presets, viewport device profiles, preview layouts, and recent URLs. Older stores are
+migrated with empty route and preset collections.
+
+Toolbar buttons, menus, and keyboard shortcuts share the command registry in
+`src/commands/registry.ts`. Route, fit, status, viewport, and layout calculations stay in reusable
+helpers under `src/utils`.
+
+Screenshot capture uses WebView2's Chrome DevTools Protocol from a dedicated Tauri command.
+Captures are written below the application data `captures` directory. Exported self-contained HTML
+reports are written below `reports`; capture paths are validated before their contents are embedded.
+Everything remains local.

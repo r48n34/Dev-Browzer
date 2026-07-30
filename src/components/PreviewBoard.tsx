@@ -1,15 +1,31 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from 'react';
-import { ActionIcon, Badge, Box, Button, Group, Paper, Slider, Text, Tooltip } from '@mantine/core';
+import {
+  ActionIcon,
+  Alert,
+  Badge,
+  Box,
+  Button,
+  Group,
+  Menu,
+  Paper,
+  Slider,
+  Text,
+  Tooltip,
+} from '@mantine/core';
 import {
   IconAlertTriangle,
   IconArrowsMaximize,
+  IconCamera,
   IconCode,
+  IconDotsVertical,
   IconExternalLink,
   IconFocus2,
   IconGripVertical,
   IconLayoutGrid,
   IconRefresh,
+  IconRulerMeasure,
   IconX,
+  IconZoomReset,
 } from '@tabler/icons-react';
 import { getProjectViewports } from '../config/viewports';
 import { usePreviewGeometry } from '../hooks/usePreviewGeometry';
@@ -22,16 +38,20 @@ import {
 } from '../native/bridge';
 import { useDevBrowzer } from '../state/context';
 import type { PreviewBoardLayout, PreviewLoadState, ViewportDefinition } from '../types';
+import { fitPreviewLayouts } from '../utils/fitLayout';
 import {
   PREVIEW_BOARD_GAP,
   arrangePreviewLayouts,
   getPreviewCardSize,
 } from '../utils/previewLayout';
+import { getFriendlyPreviewError, summarizePreviewStatuses } from '../utils/previewStatus';
 
 interface PreviewBoardProps {
   previewsVisible: boolean;
   focusedId: string | null;
   onFocus: (id: string | null) => void;
+  onEditProject: () => void;
+  onCapture: () => void;
 }
 
 interface DragSession {
@@ -62,19 +82,28 @@ function getEffectiveScale(
   return Math.max(selectedScale, viewport.category === 'desktop' ? 0.5 : 0.75);
 }
 
-export function PreviewBoard({ previewsVisible, focusedId, onFocus }: PreviewBoardProps) {
+export function PreviewBoard({
+  previewsVisible,
+  focusedId,
+  onFocus,
+  onEditProject,
+  onCapture,
+}: PreviewBoardProps) {
   const {
     activeProject,
     previewStatuses,
     setBoardScale,
     setPreviewLayout,
     setPreviewLayouts,
+    resetPreviewLayouts,
     toggleViewport,
   } = useDevBrowzer();
   const [liveLayouts, setLiveLayouts] = useState<Record<string, PreviewBoardLayout>>({});
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [fitLimited, setFitLimited] = useState(false);
   const dragRef = useRef<DragSession | null>(null);
+  const workspaceRef = useRef<HTMLDivElement | null>(null);
 
   const allViewports = useMemo(
     () =>
@@ -105,6 +134,14 @@ export function PreviewBoard({ previewsVisible, focusedId, onFocus }: PreviewBoa
   const automaticLayouts = useMemo(
     () => arrangePreviewLayouts(allViewports, scaleById, activeProject?.boardScale ?? 0.25),
     [activeProject?.boardScale, allViewports, scaleById],
+  );
+  const statusSummary = useMemo(
+    () =>
+      summarizePreviewStatuses(
+        allViewports.map((viewport) => viewport.id),
+        previewStatuses,
+      ),
+    [allViewports, previewStatuses],
   );
 
   const getCurrentLayout = useCallback(
@@ -186,6 +223,73 @@ export function PreviewBoard({ previewsVisible, focusedId, onFocus }: PreviewBoa
     };
   }, [setPreviewLayout]);
 
+  const autoArrange = useCallback(() => {
+    if (!activeProject) {
+      return;
+    }
+    const scales = Object.fromEntries(
+      allViewports.map((viewport) => [viewport.id, getCurrentLayout(viewport.id).scale]),
+    );
+    const maxWidth = Math.max(320, (workspaceRef.current?.clientWidth ?? 1648) - 48);
+    const arranged = arrangePreviewLayouts(
+      allViewports,
+      scales,
+      activeProject.boardScale,
+      maxWidth,
+    );
+    setLiveLayouts({});
+    setFitLimited(false);
+    setPreviewLayouts({ ...activeProject.previewLayouts, ...arranged });
+  }, [activeProject, allViewports, getCurrentLayout, setPreviewLayouts]);
+
+  const fitAll = useCallback(() => {
+    if (!activeProject) {
+      return;
+    }
+    const width = Math.max(320, (workspaceRef.current?.clientWidth ?? 1648) - 48);
+    const height = Math.max(320, window.innerHeight - 230);
+    const fitted = fitPreviewLayouts(allViewports, width, height);
+    setLiveLayouts({});
+    setFitLimited(!fitted.fits);
+    setBoardScale(fitted.scale);
+    setPreviewLayouts(fitted.layouts);
+  }, [activeProject, allViewports, setBoardScale, setPreviewLayouts]);
+
+  const useActualSize = useCallback(() => {
+    if (!activeProject) {
+      return;
+    }
+    const scales = Object.fromEntries(allViewports.map((viewport) => [viewport.id, 1]));
+    const width = Math.max(320, (workspaceRef.current?.clientWidth ?? 1648) - 48);
+    setLiveLayouts({});
+    setFitLimited(false);
+    setBoardScale(1);
+    setPreviewLayouts(arrangePreviewLayouts(allViewports, scales, 1, width));
+  }, [activeProject, allViewports, setBoardScale, setPreviewLayouts]);
+
+  const resetBoard = useCallback(() => {
+    setLiveLayouts({});
+    setFitLimited(false);
+    resetPreviewLayouts();
+  }, [resetPreviewLayouts]);
+
+  useEffect(() => {
+    const listener = (event: Event) => {
+      const command = (event as CustomEvent<string>).detail;
+      if (command === 'fit') {
+        fitAll();
+      } else if (command === 'arrange') {
+        autoArrange();
+      } else if (command === 'actual-size') {
+        useActualSize();
+      } else if (command === 'reset') {
+        resetBoard();
+      }
+    };
+    window.addEventListener('devbrowzer:board-command', listener);
+    return () => window.removeEventListener('devbrowzer:board-command', listener);
+  }, [autoArrange, fitAll, resetBoard, useActualSize]);
+
   if (!activeProject) {
     return null;
   }
@@ -217,15 +321,6 @@ export function PreviewBoard({ previewsVisible, focusedId, onFocus }: PreviewBoa
     event.currentTarget.setPointerCapture?.(event.pointerId);
   };
 
-  const autoArrange = () => {
-    const scales = Object.fromEntries(
-      allViewports.map((viewport) => [viewport.id, getCurrentLayout(viewport.id).scale]),
-    );
-    const arranged = arrangePreviewLayouts(allViewports, scales, activeProject.boardScale);
-    setLiveLayouts({});
-    setPreviewLayouts({ ...activeProject.previewLayouts, ...arranged });
-  };
-
   const cardLayouts = renderedViewports.map((viewport) => {
     const saved = activeProject.previewLayouts[viewport.id];
     const current = getCurrentLayout(viewport.id);
@@ -244,10 +339,43 @@ export function PreviewBoard({ previewsVisible, focusedId, onFocus }: PreviewBoa
   );
 
   return (
-    <Box className="preview-workspace">
+    <Box ref={workspaceRef} className="preview-workspace">
+      {statusSummary.total > 0 && statusSummary.unavailable === statusSummary.total && (
+        <Alert
+          className="server-health-alert"
+          color="red"
+          icon={<IconAlertTriangle size={18} />}
+          title="Development server unavailable"
+        >
+          <Group justify="space-between" align="center" gap="sm">
+            <Text size="sm">
+              None of the previews can reach this address. Check that the server is running or
+              update the project URL.
+            </Text>
+            <Group gap="xs">
+              <Button
+                size="compact-xs"
+                variant="light"
+                color="red"
+                onClick={() => void Promise.all(allViewports.map(({ id }) => reloadPreview(id)))}
+              >
+                Retry all
+              </Button>
+              <Button size="compact-xs" variant="default" onClick={onEditProject}>
+                Edit URL
+              </Button>
+            </Group>
+          </Group>
+        </Alert>
+      )}
+      {fitLimited && (
+        <Alert className="fit-notice" color="violet" title="Minimum scale reached">
+          Every preview is arranged at 25%. Scroll the board to review the remaining workspace.
+        </Alert>
+      )}
       <Paper className="board-toolbar" radius="lg" withBorder>
         <Group justify="space-between" wrap="wrap" gap="md">
-          <Group gap="sm">
+          <Group gap="xs">
             <Text fw={700}>Preview board</Text>
             <Badge variant="light" color="gray">
               {allViewports.length} {allViewports.length === 1 ? 'viewport' : 'viewports'}
@@ -262,37 +390,106 @@ export function PreviewBoard({ previewsVisible, focusedId, onFocus }: PreviewBoa
                 Exit focus
               </Button>
             ) : (
+              <>
+                <Button
+                  size="compact-xs"
+                  variant="subtle"
+                  leftSection={<IconRulerMeasure size={14} />}
+                  onClick={fitAll}
+                >
+                  Fit all
+                </Button>
+                <Button
+                  size="compact-xs"
+                  variant="subtle"
+                  leftSection={<IconLayoutGrid size={14} />}
+                  onClick={autoArrange}
+                >
+                  Arrange
+                </Button>
+                <Menu width={180} shadow="md">
+                  <Menu.Target>
+                    <ActionIcon variant="subtle" size="sm" aria-label="More layout actions">
+                      <IconDotsVertical size={15} />
+                    </ActionIcon>
+                  </Menu.Target>
+                  <Menu.Dropdown>
+                    <Menu.Item leftSection={<IconZoomReset size={15} />} onClick={useActualSize}>
+                      Actual size (100%)
+                    </Menu.Item>
+                    <Menu.Item leftSection={<IconRefresh size={15} />} onClick={resetBoard}>
+                      Reset layout
+                    </Menu.Item>
+                  </Menu.Dropdown>
+                </Menu>
+              </>
+            )}
+          </Group>
+          <Group gap="md" wrap="nowrap">
+            <Group gap={5} wrap="nowrap" className="session-summary" aria-label="Session summary">
+              <Badge variant="light" color="teal">
+                {statusSummary.ready} ready
+              </Badge>
+              {statusSummary.loading > 0 && (
+                <Badge variant="light" color="yellow">
+                  {statusSummary.loading} loading
+                </Badge>
+              )}
+              {statusSummary.unavailable > 0 && (
+                <Badge variant="light" color="red">
+                  {statusSummary.unavailable} unavailable
+                </Badge>
+              )}
+            </Group>
+            {statusSummary.unavailable > 0 && (
               <Button
                 size="compact-xs"
                 variant="subtle"
-                leftSection={<IconLayoutGrid size={14} />}
-                onClick={autoArrange}
+                color="red"
+                leftSection={<IconRefresh size={14} />}
+                onClick={() =>
+                  void Promise.all(
+                    allViewports
+                      .filter(({ id }) => previewStatuses[id]?.state === 'error')
+                      .map(({ id }) => reloadPreview(id)),
+                  )
+                }
               >
-                Auto arrange
+                Retry failed
               </Button>
             )}
-          </Group>
-          <Group gap="sm" wrap="nowrap" className="zoom-control">
-            <Text size="xs" c="dimmed">
-              Scale all
-            </Text>
-            <Slider
-              thumbLabel="Scale all previews"
-              min={25}
-              max={100}
-              step={5}
-              value={Math.round(activeProject.boardScale * 100)}
-              onChange={(value) => {
-                setLiveLayouts({});
-                setBoardScale(value / 100);
-              }}
-              label={(value) => `${value}%`}
-              w={160}
-              disabled={Boolean(focusedId)}
-            />
-            <Badge variant="outline" color="gray" w={55}>
-              {Math.round(activeProject.boardScale * 100)}%
-            </Badge>
+            <Button
+              size="compact-xs"
+              variant="light"
+              leftSection={<IconCamera size={14} />}
+              onClick={onCapture}
+              disabled={statusSummary.ready === 0}
+            >
+              Capture
+            </Button>
+            <Group gap="sm" wrap="nowrap" className="zoom-control">
+              <Text size="xs" c="dimmed">
+                Scale
+              </Text>
+              <Slider
+                thumbLabel="Scale all previews"
+                min={25}
+                max={100}
+                step={5}
+                value={Math.round(activeProject.boardScale * 100)}
+                onChange={(value) => {
+                  setLiveLayouts({});
+                  setFitLimited(false);
+                  setBoardScale(value / 100);
+                }}
+                label={(value) => `${value}%`}
+                w={140}
+                disabled={Boolean(focusedId)}
+              />
+              <Badge variant="outline" color="gray" w={55}>
+                {Math.round(activeProject.boardScale * 100)}%
+              </Badge>
+            </Group>
           </Group>
         </Group>
       </Paper>
@@ -362,11 +559,13 @@ export function PreviewBoard({ previewsVisible, focusedId, onFocus }: PreviewBoa
                   </Box>
                 </Group>
                 <Group gap={3} wrap="nowrap">
-                  <Tooltip label={status.label}>
-                    <Badge size="xs" variant="light" color={status.color}>
-                      {state === 'error' ? <IconAlertTriangle size={11} /> : status.label}
-                    </Badge>
-                  </Tooltip>
+                  {state !== 'ready' && (
+                    <Tooltip label={status.label}>
+                      <Badge size="xs" variant="light" color={status.color}>
+                        {state === 'error' ? <IconAlertTriangle size={11} /> : status.label}
+                      </Badge>
+                    </Tooltip>
+                  )}
                   <Tooltip label="Reload this preview">
                     <ActionIcon
                       variant="subtle"
@@ -375,16 +574,6 @@ export function PreviewBoard({ previewsVisible, focusedId, onFocus }: PreviewBoa
                       onClick={() => void reloadPreview(viewport.id)}
                     >
                       <IconRefresh size={15} />
-                    </ActionIcon>
-                  </Tooltip>
-                  <Tooltip label="Open native DevTools">
-                    <ActionIcon
-                      variant="subtle"
-                      size="sm"
-                      aria-label={`Open DevTools for ${viewport.name}`}
-                      onClick={() => void openPreviewDevtools(viewport.id)}
-                    >
-                      <IconCode size={15} />
                     </ActionIcon>
                   </Tooltip>
                   <Tooltip label={focused ? 'Exit focus' : 'Focus this preview'}>
@@ -397,24 +586,34 @@ export function PreviewBoard({ previewsVisible, focusedId, onFocus }: PreviewBoa
                       {focused ? <IconArrowsMaximize size={15} /> : <IconFocus2 size={15} />}
                     </ActionIcon>
                   </Tooltip>
-                  <Tooltip
-                    label={
-                      allViewports.length === 1
-                        ? 'Keep at least one preview enabled'
-                        : 'Disable preview'
-                    }
-                  >
-                    <ActionIcon
-                      variant="subtle"
-                      color="red"
-                      size="sm"
-                      aria-label={`Disable ${viewport.name}`}
-                      disabled={allViewports.length === 1}
-                      onClick={() => toggleViewport(viewport.id)}
-                    >
-                      <IconX size={15} />
-                    </ActionIcon>
-                  </Tooltip>
+                  <Menu width={190} shadow="md" position="bottom-end">
+                    <Menu.Target>
+                      <ActionIcon
+                        variant="subtle"
+                        size="sm"
+                        aria-label={`More actions for ${viewport.name}`}
+                        data-no-drag
+                      >
+                        <IconDotsVertical size={15} />
+                      </ActionIcon>
+                    </Menu.Target>
+                    <Menu.Dropdown>
+                      <Menu.Item
+                        leftSection={<IconCode size={15} />}
+                        onClick={() => void openPreviewDevtools(viewport.id)}
+                      >
+                        Open DevTools
+                      </Menu.Item>
+                      <Menu.Item
+                        color="red"
+                        leftSection={<IconX size={15} />}
+                        disabled={allViewports.length === 1}
+                        onClick={() => toggleViewport(viewport.id)}
+                      >
+                        Disable preview
+                      </Menu.Item>
+                    </Menu.Dropdown>
+                  </Menu>
                 </Group>
               </Group>
 
@@ -456,7 +655,7 @@ export function PreviewBoard({ previewsVisible, focusedId, onFocus }: PreviewBoa
                         Preview unavailable
                       </Text>
                       <Text size="xs" c="dimmed" ta="center" lineClamp={3}>
-                        {previewStatus?.message ?? 'The development server could not be reached.'}
+                        {getFriendlyPreviewError(previewStatus?.message)}
                       </Text>
                       <Button
                         size="compact-xs"

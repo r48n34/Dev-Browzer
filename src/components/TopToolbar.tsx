@@ -1,22 +1,24 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   ActionIcon,
+  Autocomplete,
   Box,
   Button,
   Group,
+  Kbd,
   Menu,
   Select,
   Switch,
-  TextInput,
   Tooltip,
   useMantineColorScheme,
 } from '@mantine/core';
 import {
   IconArrowLeft,
   IconArrowRight,
-  IconChevronDown,
+  IconCommand,
+  IconCopy,
+  IconDots,
   IconHome,
-  IconHistory,
   IconMoon,
   IconPlus,
   IconRefresh,
@@ -32,10 +34,18 @@ import { normalizePreviewUrl } from '../utils/url';
 interface TopToolbarProps {
   onAddProject: () => void;
   onEditProject: () => void;
+  onDuplicateProject: () => void;
   onDeleteProject: () => void;
+  onOpenCommands: () => void;
 }
 
-export function TopToolbar({ onAddProject, onEditProject, onDeleteProject }: TopToolbarProps) {
+export function TopToolbar({
+  onAddProject,
+  onEditProject,
+  onDuplicateProject,
+  onDeleteProject,
+  onOpenCommands,
+}: TopToolbarProps) {
   const {
     state,
     activeProject,
@@ -47,15 +57,29 @@ export function TopToolbar({ onAddProject, onEditProject, onDeleteProject }: Top
   } = useDevBrowzer();
   const [address, setAddress] = useState(activeProject?.currentUrl ?? '');
   const [addressError, setAddressError] = useState<string | null>(null);
+  const addressRef = useRef<HTMLInputElement>(null);
   const { colorScheme, toggleColorScheme } = useMantineColorScheme();
-  const recentUrls = state.recentUrls
-    .filter((entry) => entry.projectId === activeProject?.id)
-    .slice(0, 8);
+  const recentUrls = [
+    ...new Set(
+      state.recentUrls
+        .filter((entry) => entry.projectId === activeProject?.id)
+        .map((entry) => entry.url),
+    ),
+  ].slice(0, 8);
 
   useEffect(() => {
     setAddress(activeProject?.currentUrl ?? '');
     setAddressError(null);
   }, [activeProject?.currentUrl, activeProject?.id]);
+
+  useEffect(() => {
+    const focusAddress = () => {
+      addressRef.current?.focus();
+      addressRef.current?.select();
+    };
+    window.addEventListener('devbrowzer:focus-address', focusAddress);
+    return () => window.removeEventListener('devbrowzer:focus-address', focusAddress);
+  }, []);
 
   const submitAddress = (event: FormEvent) => {
     event.preventDefault();
@@ -70,48 +94,20 @@ export function TopToolbar({ onAddProject, onEditProject, onDeleteProject }: Top
   };
 
   return (
-    <Group gap="sm" wrap="nowrap" className="top-toolbar">
+    <Group gap="xs" wrap="nowrap" className="top-toolbar">
       <Select
         aria-label="Active project"
         value={activeProject?.id ?? null}
         data={state.projects.map((project) => ({ value: project.id, label: project.name }))}
         onChange={(value) => value && selectProject(value)}
         placeholder="Choose project"
-        w={190}
+        className="project-select"
         allowDeselect={false}
         searchable
       />
-      <Menu width={200} shadow="md">
-        <Menu.Target>
-          <ActionIcon variant="default" aria-label="Project actions">
-            <IconChevronDown size={17} />
-          </ActionIcon>
-        </Menu.Target>
-        <Menu.Dropdown>
-          <Menu.Item leftSection={<IconPlus size={16} />} onClick={onAddProject}>
-            New project
-          </Menu.Item>
-          <Menu.Item
-            leftSection={<IconSettings size={16} />}
-            onClick={onEditProject}
-            disabled={!activeProject}
-          >
-            Edit project
-          </Menu.Item>
-          <Menu.Divider />
-          <Menu.Item
-            color="red"
-            leftSection={<IconTrash size={16} />}
-            onClick={onDeleteProject}
-            disabled={!activeProject}
-          >
-            Delete project
-          </Menu.Item>
-        </Menu.Dropdown>
-      </Menu>
 
-      <Group gap={4} wrap="nowrap">
-        <Tooltip label="Back">
+      <Group gap={2} wrap="nowrap" className="navigation-actions">
+        <Tooltip label="Back · Alt+Left">
           <ActionIcon
             variant="subtle"
             aria-label="Back"
@@ -121,7 +117,7 @@ export function TopToolbar({ onAddProject, onEditProject, onDeleteProject }: Top
             <IconArrowLeft size={18} />
           </ActionIcon>
         </Tooltip>
-        <Tooltip label="Forward">
+        <Tooltip label="Forward · Alt+Right">
           <ActionIcon
             variant="subtle"
             aria-label="Forward"
@@ -141,7 +137,7 @@ export function TopToolbar({ onAddProject, onEditProject, onDeleteProject }: Top
             <IconHome size={18} />
           </ActionIcon>
         </Tooltip>
-        <Tooltip label="Reload all previews">
+        <Tooltip label="Reload all · Ctrl+R">
           <ActionIcon
             variant="subtle"
             aria-label="Reload all previews"
@@ -151,43 +147,22 @@ export function TopToolbar({ onAddProject, onEditProject, onDeleteProject }: Top
             <IconRefresh size={18} />
           </ActionIcon>
         </Tooltip>
-        <Menu width={380} shadow="md" position="bottom-end">
-          <Menu.Target>
-            <Tooltip label="Recent addresses">
-              <ActionIcon
-                variant="subtle"
-                aria-label="Recent addresses"
-                disabled={recentUrls.length === 0}
-              >
-                <IconHistory size={18} />
-              </ActionIcon>
-            </Tooltip>
-          </Menu.Target>
-          <Menu.Dropdown>
-            <Menu.Label>Recent addresses</Menu.Label>
-            {recentUrls.map((entry) => (
-              <Menu.Item
-                key={`${entry.url}-${entry.visitedAt}`}
-                onClick={() => {
-                  setAddress(entry.url);
-                  navigate(entry.url);
-                }}
-              >
-                <Box className="recent-url-item">{entry.url}</Box>
-              </Menu.Item>
-            ))}
-          </Menu.Dropdown>
-        </Menu>
       </Group>
 
       <Box component="form" onSubmit={submitAddress} className="address-form">
-        <TextInput
+        <Autocomplete
+          ref={addressRef}
           aria-label="Preview address"
           value={address}
           error={addressError}
-          onChange={(event) => {
-            setAddress(event.currentTarget.value);
+          data={recentUrls}
+          onChange={(value) => {
+            setAddress(value);
             setAddressError(null);
+          }}
+          onOptionSubmit={(value) => {
+            setAddress(value);
+            navigate(value);
           }}
           placeholder="localhost:5173"
           leftSection={<Box className="secure-dot" data-secure={address.startsWith('https:')} />}
@@ -199,6 +174,7 @@ export function TopToolbar({ onAddProject, onEditProject, onDeleteProject }: Top
           rightSectionWidth={44}
           rightSectionPointerEvents="all"
           disabled={!activeProject}
+          comboboxProps={{ shadow: 'md' }}
         />
       </Box>
 
@@ -209,16 +185,66 @@ export function TopToolbar({ onAddProject, onEditProject, onDeleteProject }: Top
         aria-label="Synchronize navigation"
         disabled={!activeProject}
         size="sm"
+        className="sync-control"
       />
-      <Tooltip label={`Use ${colorScheme === 'dark' ? 'light' : 'dark'} theme`}>
-        <ActionIcon
+
+      <Tooltip label="Commands · Ctrl+K">
+        <Button
           variant="subtle"
-          aria-label="Toggle color scheme"
-          onClick={() => toggleColorScheme()}
+          size="compact-sm"
+          leftSection={<IconCommand size={17} />}
+          rightSection={<Kbd className="command-shortcut">Ctrl K</Kbd>}
+          onClick={onOpenCommands}
+          aria-label="Open command palette"
+          className="command-button"
         >
-          {colorScheme === 'dark' ? <IconSun size={18} /> : <IconMoon size={18} />}
-        </ActionIcon>
+          Commands
+        </Button>
       </Tooltip>
+
+      <Menu width={230} shadow="md" position="bottom-end">
+        <Menu.Target>
+          <ActionIcon variant="default" aria-label="More actions">
+            <IconDots size={18} />
+          </ActionIcon>
+        </Menu.Target>
+        <Menu.Dropdown>
+          <Menu.Label>Project</Menu.Label>
+          <Menu.Item leftSection={<IconPlus size={16} />} onClick={onAddProject}>
+            New project
+          </Menu.Item>
+          <Menu.Item
+            leftSection={<IconSettings size={16} />}
+            onClick={onEditProject}
+            disabled={!activeProject}
+          >
+            Edit project
+          </Menu.Item>
+          <Menu.Item
+            leftSection={<IconCopy size={16} />}
+            onClick={onDuplicateProject}
+            disabled={!activeProject}
+          >
+            Duplicate project
+          </Menu.Item>
+          <Menu.Divider />
+          <Menu.Item
+            leftSection={colorScheme === 'dark' ? <IconSun size={16} /> : <IconMoon size={16} />}
+            onClick={() => toggleColorScheme()}
+          >
+            Use {colorScheme === 'dark' ? 'light' : 'dark'} theme
+          </Menu.Item>
+          <Menu.Divider />
+          <Menu.Item
+            color="red"
+            leftSection={<IconTrash size={16} />}
+            onClick={onDeleteProject}
+            disabled={!activeProject}
+          >
+            Delete project
+          </Menu.Item>
+        </Menu.Dropdown>
+      </Menu>
     </Group>
   );
 }

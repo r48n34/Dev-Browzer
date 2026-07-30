@@ -2,6 +2,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type {
   PreviewLayout,
+  CaptureSession,
+  PreviewCapture,
   PreviewNavigationPayload,
   PreviewSpec,
   PreviewStatusPayload,
@@ -47,6 +49,17 @@ export async function reloadPreview(id: string): Promise<void> {
 
 export async function openPreviewDevtools(id: string): Promise<void> {
   await invokeIfTauri('open_preview_devtools', { id });
+}
+
+export async function capturePreviews(ids: string[]): Promise<PreviewCapture[]> {
+  return (await invokeIfTauri<PreviewCapture[]>('capture_previews', { ids })) ?? [];
+}
+
+export async function exportCaptureReport(
+  projectName: string,
+  sessions: CaptureSession[],
+): Promise<string | null> {
+  return invokeIfTauri<string>('export_capture_report', { projectName, sessions });
 }
 
 export async function bringPreviewToFront(id: string): Promise<void> {

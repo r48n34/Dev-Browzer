@@ -5,6 +5,7 @@ import {
   addRecentUrl,
   createEmptyPersistedState,
   createProjectWorkspace,
+  duplicateProjectWorkspace,
   migratePersistedState,
 } from './project';
 
@@ -15,6 +16,9 @@ describe('project persistence', () => {
     expect(project.boardScale).toBe(0.25);
     expect(project.previewLayouts).toEqual({});
     expect(project.syncNavigation).toBe(true);
+    expect(project.savedRoutes).toEqual([]);
+    expect(project.workspacePresets).toEqual([]);
+    expect(project.deviceProfiles).toEqual({});
   });
 
   it('returns safe defaults for malformed data', () => {
@@ -30,7 +34,7 @@ describe('project persistence', () => {
       recentUrls: [],
     });
     expect(migrated.activeProjectId).toBe(project.id);
-    expect(migrated.schemaVersion).toBe(2);
+    expect(migrated.schemaVersion).toBe(3);
   });
 
   it('clamps board scale while migrating older workspace data', () => {
@@ -78,5 +82,36 @@ describe('project persistence', () => {
     expect(recent).toHaveLength(RECENT_URL_LIMIT);
     expect(recent[0]).toMatchObject({ url: 'http://localhost/20', visitedAt: 'now' });
     expect(recent.filter((entry) => entry.url === 'http://localhost/20')).toHaveLength(1);
+  });
+
+  it('adds new collections while migrating a version 2 workspace', () => {
+    const project = createProjectWorkspace('App', 'http://localhost/');
+    const legacy = { ...project } as Partial<typeof project>;
+    delete legacy.savedRoutes;
+    delete legacy.workspacePresets;
+    delete legacy.deviceProfiles;
+
+    const migrated = migratePersistedState({
+      schemaVersion: 2,
+      projects: [legacy],
+      activeProjectId: project.id,
+      recentUrls: [],
+    });
+
+    expect(migrated.projects[0]).toMatchObject({
+      savedRoutes: [],
+      workspacePresets: [],
+      deviceProfiles: {},
+    });
+  });
+
+  it('duplicates projects with new project and nested route identifiers', () => {
+    const project = createProjectWorkspace('App', 'http://localhost/');
+    project.savedRoutes = [{ id: 'route', name: 'Home', url: 'http://localhost/' }];
+    const duplicate = duplicateProjectWorkspace(project);
+
+    expect(duplicate.id).not.toBe(project.id);
+    expect(duplicate.name).toBe('App copy');
+    expect(duplicate.savedRoutes[0]?.id).not.toBe('route');
   });
 });

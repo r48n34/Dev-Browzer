@@ -15,19 +15,24 @@ screens without constantly resizing a browser window. Open your local site once,
 
 ## What you can do
 
-|                                |                                                                                                              |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------ |
-| **Compare responsive layouts** | Keep phone, tablet, HD, and 2K desktop views visible together. Turn on 4K when you need it.                  |
-| **Browse in sync**             | Follow a link, redirect, back action, hash change, or popup in one preview and the other views can follow.   |
-| **Make the workspace yours**   | Choose the viewports you need, add a custom device size, rearrange previews, and pick up where you left off. |
-| **Stay focused on your site**  | Reload every preview together, jump home, open developer tools for a single view, or focus one preview.      |
+|                                |                                                                                                                    |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| **Compare responsive layouts** | Start with the Essential phone, tablet, and HD desktop set, or switch to Mobile, Desktop, All, or a custom preset. |
+| **Browse in sync**             | Follow links, redirects, history, hash changes, and popups across every synchronized preview.                      |
+| **Repeat review flows**        | Save project routes, step through them in review mode, and restore named viewport and layout presets.              |
+| **Inspect realistic devices**  | Configure pixel ratio, user agent, touch, color scheme, reduced motion, and network behavior per viewport.         |
+| **Capture visual evidence**    | Capture ready previews together, compare local sessions, add notes, and export a self-contained HTML report.       |
 
 ## Start previewing
 
-1. Start application and create a project, give it a name and enter your site address, for example `localhost:3000`.
+1. Start the application and create a project. Give it a name, enter your site address (for example, `localhost:3000`), and choose a starting viewport preset.
 2. Browse your site. With **Sync** on, the selected previews stay on the same page.
 
-Dev Browzer remembers your projects, addresses, enabled viewports, and preview layout, so your next review begins where the last one ended.
+Dev Browzer remembers projects, routes, addresses, enabled viewports, device profiles, and preview
+layouts, so the next review begins where the last one ended.
+
+Use `Ctrl+L` to focus the address bar, `Alt+Left` and `Alt+Right` for history, `Ctrl+R` to reload all
+previews, `Ctrl+K` for commands, and `Escape` to leave a focused preview.
 
 ## Built-in screen sizes
 
@@ -46,7 +51,9 @@ need to compare both orientations.
 
 ## A private, local workspace
 
-Dev Browzer works directly with the addresses you give it. It does not require an account, proxy, backend service, or bundled web server.
+Dev Browzer works directly with the addresses you give it. It does not require an account, proxy,
+backend service, or bundled web server. Project data, captures, annotations, and exported reports
+remain on your computer.
 
 ## Running Dev Browzer from source
 

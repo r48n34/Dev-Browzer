@@ -3,9 +3,12 @@ import {
   MIN_BOARD_SCALE,
   RECENT_URL_LIMIT,
   STORE_SCHEMA_VERSION,
+  type PreviewDeviceProfile,
   type PersistedAppState,
   type ProjectWorkspace,
   type RecentUrl,
+  type SavedRoute,
+  type WorkspacePreset,
 } from '../types';
 import { clampBoardScale } from './viewport';
 import { sanitizePreviewLayouts } from './previewLayout';
@@ -22,6 +25,9 @@ export function createProjectWorkspace(name: string, url: string): ProjectWorksp
     boardScale: MIN_BOARD_SCALE,
     previewLayouts: {},
     syncNavigation: true,
+    savedRoutes: [],
+    workspacePresets: [],
+    deviceProfiles: {},
     createdAt: now,
     updatedAt: now,
     lastOpenedAt: now,
@@ -45,15 +51,29 @@ export function migratePersistedState(input: unknown): PersistedAppState {
 
   const data = input as Partial<PersistedAppState>;
   const projects = Array.isArray(data.projects)
-    ? data.projects.filter(isProjectWorkspace).map((project) => ({
-        ...project,
-        boardScale: clampBoardScale(project.boardScale),
-        previewLayouts: sanitizePreviewLayouts(project.previewLayouts),
-        enabledViewportIds:
-          project.enabledViewportIds.length > 0
-            ? project.enabledViewportIds
-            : [...DEFAULT_VIEWPORT_IDS],
-      }))
+    ? data.projects.filter(isProjectWorkspace).map((project) => {
+        const candidate = project as ProjectWorkspace;
+        return {
+          ...candidate,
+          boardScale: clampBoardScale(candidate.boardScale),
+          previewLayouts: sanitizePreviewLayouts(candidate.previewLayouts),
+          enabledViewportIds:
+            candidate.enabledViewportIds.length > 0
+              ? candidate.enabledViewportIds
+              : [...DEFAULT_VIEWPORT_IDS],
+          savedRoutes: Array.isArray(candidate.savedRoutes)
+            ? candidate.savedRoutes.filter(isSavedRoute)
+            : [],
+          workspacePresets: Array.isArray(candidate.workspacePresets)
+            ? candidate.workspacePresets.filter(isWorkspacePreset).map((preset) => ({
+                ...preset,
+                boardScale: clampBoardScale(preset.boardScale),
+                previewLayouts: sanitizePreviewLayouts(preset.previewLayouts),
+              }))
+            : [],
+          deviceProfiles: sanitizeDeviceProfiles(candidate.deviceProfiles),
+        };
+      })
     : [];
   const activeProjectId =
     typeof data.activeProjectId === 'string' &&
@@ -68,6 +88,29 @@ export function migratePersistedState(input: unknown): PersistedAppState {
     recentUrls: Array.isArray(data.recentUrls)
       ? data.recentUrls.filter(isRecentUrl).slice(0, RECENT_URL_LIMIT)
       : [],
+  };
+}
+
+export function duplicateProjectWorkspace(
+  project: ProjectWorkspace,
+  name = `${project.name} copy`,
+): ProjectWorkspace {
+  const now = new Date().toISOString();
+  return {
+    ...project,
+    id: crypto.randomUUID(),
+    name,
+    savedRoutes: project.savedRoutes.map((route) => ({ ...route, id: crypto.randomUUID() })),
+    workspacePresets: project.workspacePresets.map((preset) => ({
+      ...preset,
+      id: crypto.randomUUID(),
+      previewLayouts: { ...preset.previewLayouts },
+    })),
+    deviceProfiles: { ...project.deviceProfiles },
+    previewLayouts: { ...project.previewLayouts },
+    createdAt: now,
+    updatedAt: now,
+    lastOpenedAt: now,
   };
 }
 
@@ -99,6 +142,75 @@ function isProjectWorkspace(value: unknown): value is ProjectWorkspace {
     typeof project.createdAt === 'string' &&
     typeof project.updatedAt === 'string' &&
     typeof project.lastOpenedAt === 'string'
+  );
+}
+
+function isSavedRoute(value: unknown): value is SavedRoute {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  const route = value as Partial<SavedRoute>;
+  return (
+    typeof route.id === 'string' && typeof route.name === 'string' && typeof route.url === 'string'
+  );
+}
+
+function isWorkspacePreset(value: unknown): value is WorkspacePreset {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  const preset = value as Partial<WorkspacePreset>;
+  return (
+    typeof preset.id === 'string' &&
+    typeof preset.name === 'string' &&
+    Array.isArray(preset.enabledViewportIds) &&
+    typeof preset.boardScale === 'number' &&
+    Number.isFinite(preset.boardScale) &&
+    typeof preset.createdAt === 'string'
+  );
+}
+
+function sanitizeDeviceProfiles(input: unknown): Record<string, PreviewDeviceProfile> {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(input).flatMap(([id, value]) => {
+      if (!id || !value || typeof value !== 'object') {
+        return [];
+      }
+      const profile = value as Partial<PreviewDeviceProfile>;
+      const colorScheme = profile.colorScheme;
+      const networkProfile = profile.networkProfile;
+      if (
+        typeof profile.devicePixelRatio !== 'number' ||
+        !Number.isFinite(profile.devicePixelRatio) ||
+        typeof profile.userAgent !== 'string' ||
+        typeof profile.touchEnabled !== 'boolean' ||
+        (colorScheme !== 'system' && colorScheme !== 'light' && colorScheme !== 'dark') ||
+        (networkProfile !== 'online' &&
+          networkProfile !== 'fast-3g' &&
+          networkProfile !== 'slow-3g' &&
+          networkProfile !== 'offline') ||
+        typeof profile.reducedMotion !== 'boolean'
+      ) {
+        return [];
+      }
+      return [
+        [
+          id,
+          {
+            devicePixelRatio: Math.min(4, Math.max(0.5, profile.devicePixelRatio)),
+            userAgent: profile.userAgent,
+            touchEnabled: profile.touchEnabled,
+            colorScheme,
+            networkProfile,
+            reducedMotion: profile.reducedMotion,
+          },
+        ],
+      ];
+    }),
   );
 }
 

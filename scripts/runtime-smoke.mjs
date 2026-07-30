@@ -1,13 +1,7 @@
 const CDP_ENDPOINT = 'http://127.0.0.1:9222/json/list';
 const FIXTURE_ORIGIN = 'http://127.0.0.1:4173';
-const EXPECTED_VIEWPORTS = new Set([
-  '390x844',
-  '844x390',
-  '768x1024',
-  '1024x768',
-  '1920x1080',
-  '2560x1440',
-]);
+const EXPECTED_VIEWPORTS = new Set(['390x844', '768x1024', '1920x1080']);
+const EXPECTED_PREVIEW_COUNT = EXPECTED_VIEWPORTS.size;
 
 const delay = (milliseconds) =>
   new Promise((resolve) => {
@@ -84,7 +78,7 @@ async function evaluate(target, expression) {
 }
 
 async function inspectTargets() {
-  const targets = await waitForTargets(7);
+  const targets = await waitForTargets(EXPECTED_PREVIEW_COUNT + 1);
   return Promise.all(
     targets.map(async (target) => ({
       target,
@@ -108,7 +102,10 @@ async function waitForPreviewUrl(expectedUrl, timeout = 10_000) {
   while (Date.now() < deadline) {
     const inspected = await inspectTargets();
     previews = inspected.filter(({ page }) => page.url.startsWith(FIXTURE_ORIGIN));
-    if (previews.length === 6 && previews.every(({ page }) => page.url === expectedUrl)) {
+    if (
+      previews.length === EXPECTED_PREVIEW_COUNT &&
+      previews.every(({ page }) => page.url === expectedUrl)
+    ) {
       return previews;
     }
     await delay(200);
@@ -120,11 +117,51 @@ async function waitForPreviewUrl(expectedUrl, timeout = 10_000) {
   );
 }
 
-const inspected = await inspectTargets();
+async function prepareEssentialWorkspace(shell) {
+  await evaluate(
+    shell.target,
+    `(() => {
+      const essential = [...document.querySelectorAll('button')].find(
+        (button) => button.textContent?.trim() === 'Essential',
+      );
+      essential?.click();
+      const input = document.querySelector('input[aria-label="Preview address"]');
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      setter.call(input, ${JSON.stringify(`${FIXTURE_ORIGIN}/`)});
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      document.querySelector('button[type="submit"]')?.click();
+    })()`,
+  );
+  await waitForPreviewUrl(`${FIXTURE_ORIGIN}/`, 20_000);
+  await evaluate(
+    shell.target,
+    `document.querySelector('button[aria-label="More layout actions"]')?.click()`,
+  );
+  await delay(100);
+  // Use the product's 100% control so CDP assertions are independent of host fractional-DPI
+  // rounding while still exercising the normal preview geometry path.
+  await evaluate(
+    shell.target,
+    `[...document.querySelectorAll('[role="menuitem"]')].find(
+      (item) => item.textContent?.includes('Actual size'),
+    )?.click()`,
+  );
+  await delay(500);
+}
+
+let inspected = await inspectTargets();
 const expectUnavailable = process.argv.includes('--expect-unavailable');
+const prepareEssential = process.argv.includes('--prepare-essential');
 const navigateUrlArgument = process.argv.find((argument) => argument.startsWith('--navigate-url='));
 const navigateTargetUrl = navigateUrlArgument?.slice('--navigate-url='.length);
 const shell = inspected.find(({ page }) => page.title === 'Dev Browzer');
+assert(shell, 'The Dev Browzer shell target was not found.');
+
+if (prepareEssential) {
+  await prepareEssentialWorkspace(shell);
+  inspected = await inspectTargets();
+}
+
 const previews =
   expectUnavailable || navigateTargetUrl
     ? inspected.filter(({ page }) => page.title !== 'Dev Browzer')
@@ -132,13 +169,27 @@ const previews =
 const expectedUrlArgument = process.argv.find((argument) => argument.startsWith('--expected-url='));
 const expectedPersistedUrl = expectedUrlArgument?.slice('--expected-url='.length);
 
-assert(shell, 'The Dev Browzer shell target was not found.');
-assert(previews.length === 6, `Expected 6 preview targets, found ${previews.length}.`);
+assert(
+  previews.length === EXPECTED_PREVIEW_COUNT,
+  `Expected ${EXPECTED_PREVIEW_COUNT} preview targets, found ${previews.length}.`,
+);
 
 const actualViewports = new Set(previews.map(({ page }) => `${page.width}x${page.height}`));
+const shellSurfaces = await evaluate(
+  shell.target,
+  `[...document.querySelectorAll('[data-preview-scale]')].map((element) => {
+    const rect = element.getBoundingClientRect();
+    return {
+      id: element.dataset.testid,
+      scale: element.dataset.previewScale,
+      width: rect.width,
+      height: rect.height,
+    };
+  })`,
+);
 assert(
   [...EXPECTED_VIEWPORTS].every((viewport) => actualViewports.has(viewport)),
-  `Unexpected preview dimensions: ${[...actualViewports].join(', ')}`,
+  `Unexpected preview dimensions: ${[...actualViewports].join(', ')}; surfaces: ${JSON.stringify(shellSurfaces)}`,
 );
 
 if (expectedPersistedUrl) {
@@ -164,23 +215,49 @@ if (expectedPersistedUrl) {
 }
 
 if (expectUnavailable) {
+  await evaluate(
+    shell.target,
+    `document.querySelector('button[aria-label="Reload all previews"]')?.click()`,
+  );
   const deadline = Date.now() + 10_000;
-  let shellText = '';
+  let recovery = {
+    unavailableCount: 0,
+    previewRetryCount: 0,
+    hasRetryAll: false,
+    hasRetryFailed: false,
+  };
   while (Date.now() < deadline) {
-    shellText = await evaluate(shell.target, 'document.body.innerText');
+    recovery = await evaluate(
+      shell.target,
+      `(() => {
+        const text = document.body.innerText;
+        const labels = [...document.querySelectorAll('button')].map(
+          (button) => button.textContent?.trim(),
+        );
+        return {
+          unavailableCount: text.split('Preview unavailable').length - 1,
+          previewRetryCount: labels.filter((label) => label === 'Retry').length,
+          hasRetryAll: labels.includes('Retry all'),
+          hasRetryFailed: labels.includes('Retry failed'),
+        };
+      })()`,
+    );
     if (
-      shellText.split('Preview unavailable').length - 1 === 6 &&
-      shellText.split('Retry').length - 1 === 6
+      recovery.unavailableCount === EXPECTED_PREVIEW_COUNT &&
+      recovery.previewRetryCount === EXPECTED_PREVIEW_COUNT &&
+      recovery.hasRetryAll &&
+      recovery.hasRetryFailed
     ) {
       break;
     }
     await delay(200);
   }
-  const unavailableCount = shellText.split('Preview unavailable').length - 1;
-  const retryCount = shellText.split('Retry').length - 1;
   assert(
-    unavailableCount === 6 && retryCount === 6,
-    `Expected six recoverable preview errors, found ${unavailableCount} errors and ${retryCount} Retry actions.`,
+    recovery.unavailableCount === EXPECTED_PREVIEW_COUNT &&
+      recovery.previewRetryCount === EXPECTED_PREVIEW_COUNT &&
+      recovery.hasRetryAll &&
+      recovery.hasRetryFailed,
+    `Expected ${EXPECTED_PREVIEW_COUNT} recoverable preview errors with card and aggregate Retry actions, found ${JSON.stringify(recovery)}.`,
   );
   console.log(
     JSON.stringify(
@@ -188,8 +265,7 @@ if (expectUnavailable) {
         status: 'passed',
         checked: 'packaged unavailable-server recovery',
         previewCount: previews.length,
-        unavailableCount,
-        retryCount,
+        ...recovery,
       },
       null,
       2,
@@ -224,7 +300,11 @@ if (navigateTargetUrl) {
         return false;
       }
     });
-    if (synchronizedPreviews.length === 6 && hostMatches && new Set(urls).size === 1) {
+    if (
+      synchronizedPreviews.length === EXPECTED_PREVIEW_COUNT &&
+      hostMatches &&
+      new Set(urls).size === 1
+    ) {
       break;
     }
     await delay(250);
@@ -232,7 +312,7 @@ if (navigateTargetUrl) {
 
   const synchronizedUrls = synchronizedPreviews.map(({ page }) => page.url);
   assert(
-    synchronizedPreviews.length === 6 &&
+    synchronizedPreviews.length === EXPECTED_PREVIEW_COUNT &&
       synchronizedUrls.every((url) => new URL(url).hostname === expectedHost) &&
       new Set(synchronizedUrls).size === 1,
     `External previews did not synchronize: ${synchronizedUrls.join(', ')}`,

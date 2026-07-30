@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Button, Group, Modal, Stack, TextInput } from '@mantine/core';
+import { Button, Group, Modal, Select, Stack, Text, TextInput } from '@mantine/core';
+import { VIEWPORT_PRESETS } from '../config/viewports';
 import type { ProjectWorkspace } from '../types';
+import type { ViewportPresetId } from '../types';
 import { normalizePreviewUrl } from '../utils/url';
 
 interface ProjectModalProps {
@@ -8,7 +10,7 @@ interface ProjectModalProps {
   project?: ProjectWorkspace | null;
   required?: boolean;
   onClose: () => void;
-  onSubmit: (name: string, url: string) => void;
+  onSubmit: (name: string, url: string, viewportPresetId: ViewportPresetId) => void;
 }
 
 export function ProjectModal({
@@ -20,6 +22,7 @@ export function ProjectModal({
 }: ProjectModalProps) {
   const [name, setName] = useState('');
   const [url, setUrl] = useState('http://localhost:5173');
+  const [viewportPresetId, setViewportPresetId] = useState<ViewportPresetId>('essential');
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -28,6 +31,7 @@ export function ProjectModal({
     }
     setName(project?.name ?? '');
     setUrl(project?.baseUrl ?? 'http://localhost:5173');
+    setViewportPresetId('essential');
     setError(null);
   }, [opened, project]);
 
@@ -37,7 +41,7 @@ export function ProjectModal({
       if (!name.trim()) {
         throw new Error('Give this project a name.');
       }
-      onSubmit(name.trim(), normalizedUrl);
+      onSubmit(name.trim(), normalizedUrl, viewportPresetId);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : 'Unable to save project.');
     }
@@ -55,6 +59,12 @@ export function ProjectModal({
       overlayProps={{ backgroundOpacity: 0.62, blur: 5 }}
     >
       <Stack gap="md">
+        {!project && (
+          <Text size="sm" c="dimmed">
+            Connect a site and start with the screen sizes you review most often. You can change
+            them at any time.
+          </Text>
+        )}
         <TextInput
           label="Project name"
           placeholder="Marketing site"
@@ -78,6 +88,19 @@ export function ProjectModal({
             }
           }}
         />
+        {!project && (
+          <Select
+            label="Starting viewport set"
+            description="Essential keeps the first workspace fast and easy to scan."
+            value={viewportPresetId}
+            data={VIEWPORT_PRESETS.map((preset) => ({
+              value: preset.id,
+              label: `${preset.name} — ${preset.description}`,
+            }))}
+            onChange={(value) => setViewportPresetId((value as ViewportPresetId) ?? 'essential')}
+            allowDeselect={false}
+          />
+        )}
         <Group justify="flex-end">
           {!required && (
             <Button variant="subtle" color="gray" onClick={onClose}>

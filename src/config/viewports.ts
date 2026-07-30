@@ -1,4 +1,9 @@
-import type { ViewportDefinition } from '../types';
+import type {
+  PreviewDeviceProfile,
+  ViewportDefinition,
+  ViewportPreset,
+  ViewportPresetId,
+} from '../types';
 
 export const BUILT_IN_VIEWPORTS: ViewportDefinition[] = [
   {
@@ -60,8 +65,69 @@ export const BUILT_IN_VIEWPORTS: ViewportDefinition[] = [
 ];
 
 export const DEFAULT_VIEWPORT_IDS = BUILT_IN_VIEWPORTS.filter(
-  (viewport) => viewport.id !== 'desktop-4k',
+  (viewport) =>
+    viewport.id === 'phone-portrait' ||
+    viewport.id === 'ipad-portrait' ||
+    viewport.id === 'desktop-hd',
 ).map((viewport) => viewport.id);
+
+export const VIEWPORT_PRESETS: ViewportPreset[] = [
+  {
+    id: 'essential',
+    name: 'Essential',
+    description: 'Phone, tablet, and desktop',
+    viewportIds: ['phone-portrait', 'ipad-portrait', 'desktop-hd'],
+  },
+  {
+    id: 'mobile',
+    name: 'Mobile',
+    description: 'Phone and tablet orientations',
+    viewportIds: ['phone-portrait', 'phone-landscape', 'ipad-portrait', 'ipad-landscape'],
+  },
+  {
+    id: 'desktop',
+    name: 'Desktop',
+    description: 'HD, 2K, and 4K screens',
+    viewportIds: ['desktop-hd', 'desktop-2k', 'desktop-4k'],
+  },
+  {
+    id: 'all',
+    name: 'All',
+    description: 'Every built-in viewport',
+    viewportIds: BUILT_IN_VIEWPORTS.map((viewport) => viewport.id),
+  },
+];
+
+export const DEFAULT_DEVICE_PROFILE: PreviewDeviceProfile = {
+  devicePixelRatio: 1,
+  userAgent: '',
+  touchEnabled: false,
+  colorScheme: 'system',
+  networkProfile: 'online',
+  reducedMotion: false,
+};
+
+export function getViewportPreset(id: ViewportPresetId): ViewportPreset {
+  return VIEWPORT_PRESETS.find((preset) => preset.id === id) ?? VIEWPORT_PRESETS[0];
+}
+
+export function matchViewportPreset(enabledIds: string[]): ViewportPresetId | null {
+  const enabled = new Set(enabledIds);
+  return (
+    VIEWPORT_PRESETS.find(
+      (preset) =>
+        preset.viewportIds.length === enabled.size &&
+        preset.viewportIds.every((id) => enabled.has(id)),
+    )?.id ?? null
+  );
+}
+
+export function getPreviewDeviceProfile(
+  profiles: Record<string, PreviewDeviceProfile>,
+  viewportId: string,
+): PreviewDeviceProfile {
+  return { ...DEFAULT_DEVICE_PROFILE, ...profiles[viewportId] };
+}
 
 export function getProjectViewports(
   enabledIds: string[],
