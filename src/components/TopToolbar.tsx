@@ -17,6 +17,7 @@ import {
   IconArrowRight,
   IconCommand,
   IconCopy,
+  IconCookie,
   IconDots,
   IconHome,
   IconMoon,
@@ -37,6 +38,7 @@ interface TopToolbarProps {
   onDuplicateProject: () => void;
   onDeleteProject: () => void;
   onOpenCommands: () => void;
+  onOpenSessionData: () => void;
 }
 
 export function TopToolbar({
@@ -45,6 +47,7 @@ export function TopToolbar({
   onDuplicateProject,
   onDeleteProject,
   onOpenCommands,
+  onOpenSessionData,
 }: TopToolbarProps) {
   const {
     state,
@@ -226,6 +229,15 @@ export function TopToolbar({
             disabled={!activeProject}
           >
             Duplicate project
+          </Menu.Item>
+          <Menu.Divider />
+          <Menu.Label>Browser session</Menu.Label>
+          <Menu.Item
+            leftSection={<IconCookie size={16} />}
+            onClick={onOpenSessionData}
+            disabled={!activeProject}
+          >
+            Cookies & local storage
           </Menu.Item>
           <Menu.Divider />
           <Menu.Item

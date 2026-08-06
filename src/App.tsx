@@ -19,6 +19,7 @@ import { DeviceProfileModal } from './components/DeviceProfileModal';
 import { PreviewBoard } from './components/PreviewBoard';
 import { ProjectModal } from './components/ProjectModal';
 import { RouteModal } from './components/RouteModal';
+import { SessionDataModal } from './components/SessionDataModal';
 import { TopToolbar } from './components/TopToolbar';
 import { ViewportSidebar } from './components/ViewportSidebar';
 import { WorkspacePresetModal } from './components/WorkspacePresetModal';
@@ -32,6 +33,7 @@ import { useWorkbenchShortcuts } from './hooks/useWorkbenchShortcuts';
 import {
   capturePreviews,
   exportCaptureReport,
+  listenForActivePreview,
   reloadPreviews,
   setPreviewsVisible,
 } from './native/bridge';
@@ -101,6 +103,8 @@ function Workbench() {
   const [captureSessions, setCaptureSessions] = useState<CaptureSession[]>([]);
   const [captureExportPath, setCaptureExportPath] = useState<string | null>(null);
   const [captureError, setCaptureError] = useState<string | null>(null);
+  const [sessionDataOpened, setSessionDataOpened] = useState(false);
+  const [activePreviewId, setActivePreviewId] = useState<string | null>(null);
   const firstRun = initialized && !activeProject;
   const overlayOpen =
     firstRun ||
@@ -110,7 +114,8 @@ function Workbench() {
     deviceProfileViewport !== null ||
     workspacePresetModal ||
     commandsOpened ||
-    captureDrawerOpened;
+    captureDrawerOpened ||
+    sessionDataOpened;
 
   const activeViewports = useMemo(
     () =>
@@ -119,6 +124,10 @@ function Workbench() {
         : [],
     [activeProject],
   );
+  const sessionPreviewId =
+    focusedId ?? activePreviewId ?? activeProject?.enabledViewportIds[0] ?? null;
+  const sessionPreviewName =
+    activeViewports.find((viewport) => viewport.id === sessionPreviewId)?.name ?? null;
 
   useEffect(() => {
     void setPreviewsVisible(!overlayOpen && document.visibilityState !== 'hidden');
@@ -137,6 +146,23 @@ function Workbench() {
       setFocusedId(null);
     }
   }, [activeProject, focusedId]);
+
+  useEffect(() => {
+    setActivePreviewId(null);
+  }, [activeProject?.id]);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: () => void = () => undefined;
+    void listenForActivePreview(setActivePreviewId).then((cleanup) => {
+      if (disposed) cleanup();
+      else unlisten = cleanup;
+    });
+    return () => {
+      disposed = true;
+      unlisten();
+    };
+  }, []);
 
   const editingCustomViewport = useMemo(
     () => (customViewportModal === 'create' ? null : customViewportModal),
@@ -290,6 +316,14 @@ function Workbench() {
         run: () => void captureReadyPreviews(),
       },
       {
+        id: 'session-data',
+        label: 'Manage cookies and local storage',
+        description: 'Inspect browser data for the current preview session',
+        disabled: !activeProject,
+        keywords: ['cookies', 'storage', 'session'],
+        run: () => setSessionDataOpened(true),
+      },
+      {
         id: 'previous-route',
         label: 'Previous review route',
         description: previousRoute?.name ?? 'No previous saved route',
@@ -405,6 +439,7 @@ function Workbench() {
                 }
               }}
               onOpenCommands={openCommands}
+              onOpenSessionData={() => setSessionDataOpened(true)}
             />
           </Box>
         </AppShell.Header>
@@ -428,6 +463,8 @@ function Workbench() {
               onFocus={setFocusedId}
               onEditProject={() => setProjectModalMode('edit')}
               onCapture={() => void captureReadyPreviews()}
+              activeId={activePreviewId}
+              onActiveChange={setActivePreviewId}
             />
           ) : (
             <Center h="calc(100vh - 72px)">
@@ -546,6 +583,14 @@ function Workbench() {
               setCaptureError(error instanceof Error ? error.message : String(error)),
             );
         }}
+      />
+
+      <SessionDataModal
+        opened={sessionDataOpened}
+        previewId={sessionPreviewId}
+        previewName={sessionPreviewName}
+        url={activeProject?.currentUrl ?? ''}
+        onClose={() => setSessionDataOpened(false)}
       />
     </>
   );

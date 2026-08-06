@@ -168,4 +168,26 @@ describe('Dev Browzer workbench', () => {
       expect(screen.queryByRole('dialog', { name: /Device profile/ })).not.toBeInTheDocument();
     });
   });
+
+  it('opens the cookie and local storage manager for the current preview', async () => {
+    renderApp();
+    const user = await createWorkspace();
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Add a project' })).not.toBeInTheDocument();
+    });
+
+    await user.keyboard('{Control>}k{/Control}');
+    await user.type(await screen.findByLabelText('Search commands'), 'cookies');
+    await user.click(screen.getByRole('button', { name: /Manage cookies and local storage/ }));
+
+    expect(
+      await screen.findByRole('dialog', { name: 'Cookies & local storage' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Cookie and local storage management is available in the Windows Tauri app.',
+      ),
+    ).toBeInTheDocument();
+  });
 });

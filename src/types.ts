@@ -149,3 +149,27 @@ export interface CaptureSession {
   captures: PreviewCapture[];
   annotations: Record<string, string>;
 }
+
+export type BrowserCookieSameSite = 'Strict' | 'Lax' | 'None';
+
+export interface BrowserCookie {
+  name: string;
+  value: string;
+  domain: string;
+  path: string;
+  expires: number | null;
+  httpOnly: boolean;
+  secure: boolean;
+  sameSite: BrowserCookieSameSite | null;
+}
+
+export interface BrowserStorageEntry {
+  key: string;
+  value: string;
+}
+
+export interface BrowserSessionData {
+  origin: string;
+  cookies: BrowserCookie[];
+  localStorage: BrowserStorageEntry[];
+}

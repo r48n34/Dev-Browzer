@@ -47,8 +47,8 @@ input {
   display: flex;
   align-items: center;
   gap: var(--mantine-spacing-md);
-  width: 284px;
-  flex: 0 0 284px;
+  width: 80px;
+  flex: 0 0 80px;
 }
 
 .header-toolbar {

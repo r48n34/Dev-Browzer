@@ -116,6 +116,42 @@ struct PreviewCaptureInput {
     height: u32,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserCookie {
+    name: String,
+    value: String,
+    domain: String,
+    path: String,
+    expires: Option<f64>,
+    http_only: bool,
+    secure: bool,
+    same_site: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserCookieKey {
+    name: String,
+    domain: String,
+    path: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserStorageEntry {
+    key: String,
+    value: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserSessionData {
+    origin: String,
+    cookies: Vec<BrowserCookie>,
+    local_storage: Vec<BrowserStorageEntry>,
+}
+
 #[derive(Default)]
 pub struct PreviewCoordinator {
     inner: Mutex<CoordinatorState>,
@@ -495,6 +531,118 @@ pub async fn reload_preview(webview: Webview, app: AppHandle, id: String) -> Res
         .get_webview(&preview_label(&id))
         .ok_or_else(|| format!("Preview {id} does not exist."))?;
     preview.reload().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn get_browser_session_data(
+    webview: Webview,
+    app: AppHandle,
+    id: String,
+) -> Result<BrowserSessionData, String> {
+    ensure_main_caller(&webview)?;
+    let preview = get_preview(&app, &id)?;
+    let normalized_url = get_preview_url(&preview)?;
+    let parsed_url = Url::parse(&normalized_url).map_err(|error| error.to_string())?;
+    Ok(BrowserSessionData {
+        origin: parsed_url.origin().ascii_serialization(),
+        cookies: read_browser_cookies(&preview, &normalized_url)?,
+        local_storage: read_browser_local_storage(&preview)?,
+    })
+}
+
+#[tauri::command]
+pub async fn set_browser_cookie(
+    webview: Webview,
+    app: AppHandle,
+    id: String,
+    cookie: BrowserCookie,
+) -> Result<(), String> {
+    ensure_main_caller(&webview)?;
+    validate_browser_cookie(&cookie)?;
+    let preview = get_preview(&app, &id)?;
+    let normalized_url = get_preview_url(&preview)?;
+    write_browser_cookie(&preview, &normalized_url, &cookie)
+}
+
+#[tauri::command]
+pub async fn delete_browser_cookie(
+    webview: Webview,
+    app: AppHandle,
+    id: String,
+    cookie: BrowserCookieKey,
+) -> Result<(), String> {
+    ensure_main_caller(&webview)?;
+    let preview = get_preview(&app, &id)?;
+    let normalized_url = get_preview_url(&preview)?;
+    remove_browser_cookie(&preview, &normalized_url, &cookie)
+}
+
+#[tauri::command]
+pub async fn clear_browser_cookies(
+    webview: Webview,
+    app: AppHandle,
+    id: String,
+) -> Result<(), String> {
+    ensure_main_caller(&webview)?;
+    let preview = get_preview(&app, &id)?;
+    let normalized_url = get_preview_url(&preview)?;
+    for cookie in read_browser_cookies(&preview, &normalized_url)? {
+        remove_browser_cookie(
+            &preview,
+            &normalized_url,
+            &BrowserCookieKey {
+                name: cookie.name,
+                domain: cookie.domain,
+                path: cookie.path,
+            },
+        )?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_browser_local_storage(
+    webview: Webview,
+    app: AppHandle,
+    id: String,
+    key: String,
+    value: String,
+) -> Result<(), String> {
+    ensure_main_caller(&webview)?;
+    let preview = get_preview(&app, &id)?;
+    let expression = format!(
+        "localStorage.setItem({}, {}); true",
+        serde_json::to_string(&key).map_err(|error| error.to_string())?,
+        serde_json::to_string(&value).map_err(|error| error.to_string())?
+    );
+    evaluate_preview_script(&preview, &expression).map(|_| ())
+}
+
+#[tauri::command]
+pub async fn delete_browser_local_storage(
+    webview: Webview,
+    app: AppHandle,
+    id: String,
+    key: String,
+) -> Result<(), String> {
+    ensure_main_caller(&webview)?;
+    let preview = get_preview(&app, &id)?;
+    let expression = format!(
+        "localStorage.removeItem({}); true",
+        serde_json::to_string(&key).map_err(|error| error.to_string())?
+    );
+    evaluate_preview_script(&preview, &expression).map(|_| ())
+}
+
+#[tauri::command]
+pub async fn clear_browser_local_storage(
+    webview: Webview,
+    app: AppHandle,
+    id: String,
+) -> Result<(), String> {
+    ensure_main_caller(&webview)?;
+    let preview = get_preview(&app, &id)?;
+    evaluate_preview_script(&preview, "localStorage.clear(); true").map(|_| ())
 }
 
 #[tauri::command]
@@ -886,6 +1034,310 @@ fn call_devtools_method(preview: &Webview, method: &str, parameters: serde_json:
         let handler = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(|_, _| Ok(())));
         let _ = core_webview.CallDevToolsProtocolMethod(&method, &parameters, &handler);
     });
+}
+
+#[cfg(windows)]
+fn call_devtools_method_with_result(
+    preview: &Webview,
+    method: &str,
+    parameters: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    use webview2_com::CallDevToolsProtocolMethodCompletedHandler;
+    use windows::core::HSTRING;
+
+    let (sender, receiver) = mpsc::channel::<Result<String, String>>();
+    let method_name = method.to_owned();
+    let timeout_method = method_name.clone();
+    let method = HSTRING::from(method);
+    let parameters = HSTRING::from(parameters.to_string());
+    preview
+        .with_webview(move |platform_webview| unsafe {
+            let Ok(core_webview) = platform_webview.controller().CoreWebView2() else {
+                let _ = sender.send(Err("Unable to access the WebView2 DevTools API.".to_owned()));
+                return;
+            };
+            let callback_sender = sender.clone();
+            let callback_method = method_name.clone();
+            let handler = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(
+                move |result, response| {
+                    let payload = result
+                        .map(|_| response)
+                        .map_err(|error| format!("WebView2 {callback_method} failed: {error}"));
+                    let _ = callback_sender.send(payload);
+                    Ok(())
+                },
+            ));
+            if let Err(error) =
+                core_webview.CallDevToolsProtocolMethod(&method, &parameters, &handler)
+            {
+                let _ = sender.send(Err(format!("WebView2 {method_name} failed: {error}")));
+            }
+        })
+        .map_err(|error| error.to_string())?;
+
+    let response = receiver
+        .recv_timeout(Duration::from_secs(10))
+        .map_err(|_| format!("Timed out while calling WebView2 {timeout_method}."))??;
+    serde_json::from_str(&response).map_err(|error| error.to_string())
+}
+
+#[cfg(not(windows))]
+fn call_devtools_method_with_result(
+    _preview: &Webview,
+    _method: &str,
+    _parameters: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    Err("Browser session management is currently available on Windows only.".to_owned())
+}
+
+fn get_preview(app: &AppHandle, id: &str) -> Result<Webview, String> {
+    app.get_webview(&preview_label(id))
+        .ok_or_else(|| format!("Preview {id} does not exist."))
+}
+
+fn get_preview_url(preview: &Webview) -> Result<String, String> {
+    let url = preview.url().map_err(|error| error.to_string())?;
+    validate_preview_url(url.as_str())
+}
+
+fn read_browser_cookies(preview: &Webview, url: &str) -> Result<Vec<BrowserCookie>, String> {
+    let payload = call_devtools_method_with_result(
+        preview,
+        "Network.getCookies",
+        serde_json::json!({ "urls": [url] }),
+    )?;
+    let values = payload
+        .get("cookies")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "WebView2 returned invalid cookie data.".to_owned())?;
+    let mut cookies = values
+        .iter()
+        .cloned()
+        .map(serde_json::from_value::<BrowserCookie>)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Unable to read cookie data: {error}"))?;
+    for cookie in &mut cookies {
+        if cookie.expires.is_some_and(|expires| expires <= 0.0) {
+            cookie.expires = None;
+        }
+    }
+    cookies.sort_by(|left, right| {
+        left.name
+            .cmp(&right.name)
+            .then(left.domain.cmp(&right.domain))
+            .then(left.path.cmp(&right.path))
+    });
+    Ok(cookies)
+}
+
+fn validate_browser_cookie(cookie: &BrowserCookie) -> Result<(), String> {
+    if cookie.name.is_empty()
+        || cookie
+            .name
+            .chars()
+            .any(|character| character.is_control() || matches!(character, ';' | '='))
+    {
+        return Err("Enter a valid cookie name.".to_owned());
+    }
+    if !cookie.path.starts_with('/') {
+        return Err("Cookie path must start with /.".to_owned());
+    }
+    if cookie
+        .same_site
+        .as_deref()
+        .is_some_and(|value| !matches!(value, "Strict" | "Lax" | "None"))
+    {
+        return Err("Enter a valid SameSite value.".to_owned());
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn write_browser_cookie(
+    preview: &Webview,
+    url: &str,
+    cookie: &BrowserCookie,
+) -> Result<(), String> {
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        ICoreWebView2_2, COREWEBVIEW2_COOKIE_SAME_SITE_KIND_LAX,
+        COREWEBVIEW2_COOKIE_SAME_SITE_KIND_NONE, COREWEBVIEW2_COOKIE_SAME_SITE_KIND_STRICT,
+    };
+    use windows::core::{Interface, HSTRING};
+
+    let domain = resolve_cookie_domain(url, &cookie.domain)?;
+    let name = cookie.name.clone();
+    let value = cookie.value.clone();
+    let path = cookie.path.clone();
+    let expires = cookie.expires;
+    let http_only = cookie.http_only;
+    let secure = cookie.secure;
+    let same_site = cookie.same_site.clone();
+    let (sender, receiver) = mpsc::channel::<Result<(), String>>();
+
+    preview
+        .with_webview(move |platform_webview| unsafe {
+            let result = (|| -> Result<(), String> {
+                let core_webview = platform_webview
+                    .controller()
+                    .CoreWebView2()
+                    .map_err(|error| format!("Unable to access WebView2: {error}"))?;
+                let core_webview_2 = core_webview.cast::<ICoreWebView2_2>().map_err(|error| {
+                    format!("WebView2 cookie management is unavailable: {error}")
+                })?;
+                let manager = core_webview_2.CookieManager().map_err(|error| {
+                    format!("Unable to access the WebView2 cookie manager: {error}")
+                })?;
+                let native_cookie = manager
+                    .CreateCookie(
+                        &HSTRING::from(name),
+                        &HSTRING::from(value),
+                        &HSTRING::from(domain),
+                        &HSTRING::from(path),
+                    )
+                    .map_err(|error| format!("Unable to create cookie: {error}"))?;
+                native_cookie
+                    .SetIsHttpOnly(http_only)
+                    .map_err(|error| format!("Unable to set HttpOnly: {error}"))?;
+                native_cookie
+                    .SetIsSecure(secure)
+                    .map_err(|error| format!("Unable to set Secure: {error}"))?;
+                if let Some(expires) = expires {
+                    native_cookie
+                        .SetExpires(expires)
+                        .map_err(|error| format!("Unable to set cookie expiry: {error}"))?;
+                }
+                if let Some(same_site) = same_site.as_deref() {
+                    let native_same_site = match same_site {
+                        "Strict" => COREWEBVIEW2_COOKIE_SAME_SITE_KIND_STRICT,
+                        "Lax" => COREWEBVIEW2_COOKIE_SAME_SITE_KIND_LAX,
+                        "None" => COREWEBVIEW2_COOKIE_SAME_SITE_KIND_NONE,
+                        _ => return Err("Enter a valid SameSite value.".to_owned()),
+                    };
+                    native_cookie
+                        .SetSameSite(native_same_site)
+                        .map_err(|error| format!("Unable to set SameSite: {error}"))?;
+                }
+                manager
+                    .AddOrUpdateCookie(&native_cookie)
+                    .map_err(|error| format!("Unable to save cookie: {error}"))
+            })();
+            let _ = sender.send(result);
+        })
+        .map_err(|error| error.to_string())?;
+
+    receiver
+        .recv_timeout(Duration::from_secs(10))
+        .map_err(|_| "Timed out while saving the cookie.".to_owned())?
+}
+
+#[cfg(not(windows))]
+fn write_browser_cookie(
+    _preview: &Webview,
+    _url: &str,
+    _cookie: &BrowserCookie,
+) -> Result<(), String> {
+    Err("Cookie management is currently available on Windows only.".to_owned())
+}
+
+#[cfg(windows)]
+fn remove_browser_cookie(
+    preview: &Webview,
+    url: &str,
+    cookie: &BrowserCookieKey,
+) -> Result<(), String> {
+    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2_2;
+    use windows::core::{Interface, HSTRING};
+
+    let domain = resolve_cookie_domain(url, &cookie.domain)?;
+    let name = cookie.name.clone();
+    let path = cookie.path.clone();
+    let (sender, receiver) = mpsc::channel::<Result<(), String>>();
+    preview
+        .with_webview(move |platform_webview| unsafe {
+            let result = (|| -> Result<(), String> {
+                let core_webview = platform_webview
+                    .controller()
+                    .CoreWebView2()
+                    .map_err(|error| format!("Unable to access WebView2: {error}"))?;
+                let core_webview_2 = core_webview.cast::<ICoreWebView2_2>().map_err(|error| {
+                    format!("WebView2 cookie management is unavailable: {error}")
+                })?;
+                let manager = core_webview_2.CookieManager().map_err(|error| {
+                    format!("Unable to access the WebView2 cookie manager: {error}")
+                })?;
+                manager
+                    .DeleteCookiesWithDomainAndPath(
+                        &HSTRING::from(name),
+                        &HSTRING::from(domain),
+                        &HSTRING::from(path),
+                    )
+                    .map_err(|error| format!("Unable to delete cookie: {error}"))
+            })();
+            let _ = sender.send(result);
+        })
+        .map_err(|error| error.to_string())?;
+
+    receiver
+        .recv_timeout(Duration::from_secs(10))
+        .map_err(|_| "Timed out while deleting the cookie.".to_owned())?
+}
+
+#[cfg(not(windows))]
+fn remove_browser_cookie(
+    _preview: &Webview,
+    _url: &str,
+    _cookie: &BrowserCookieKey,
+) -> Result<(), String> {
+    Err("Cookie management is currently available on Windows only.".to_owned())
+}
+
+fn resolve_cookie_domain(url: &str, domain: &str) -> Result<String, String> {
+    if !domain.trim().is_empty() {
+        return Ok(domain.trim().to_owned());
+    }
+    Url::parse(url)
+        .map_err(|error| error.to_string())?
+        .host_str()
+        .map(str::to_owned)
+        .ok_or_else(|| "The preview URL does not have a valid cookie domain.".to_owned())
+}
+
+fn read_browser_local_storage(preview: &Webview) -> Result<Vec<BrowserStorageEntry>, String> {
+    let value = evaluate_preview_script(
+        preview,
+        "JSON.stringify(Object.keys(localStorage).sort().map((key) => ({ key, value: localStorage.getItem(key) ?? '' })))",
+    )?;
+    let encoded = value
+        .as_str()
+        .ok_or_else(|| "WebView2 returned invalid local storage data.".to_owned())?;
+    serde_json::from_str(encoded).map_err(|error| format!("Unable to read local storage: {error}"))
+}
+
+fn evaluate_preview_script(
+    preview: &Webview,
+    expression: &str,
+) -> Result<serde_json::Value, String> {
+    let payload = call_devtools_method_with_result(
+        preview,
+        "Runtime.evaluate",
+        serde_json::json!({
+            "expression": expression,
+            "returnByValue": true,
+            "awaitPromise": true
+        }),
+    )?;
+    if let Some(exception) = payload.get("exceptionDetails") {
+        let message = exception
+            .pointer("/exception/description")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| exception.get("text").and_then(serde_json::Value::as_str))
+            .unwrap_or("The page blocked access to local storage.");
+        return Err(message.to_owned());
+    }
+    payload
+        .pointer("/result/value")
+        .cloned()
+        .ok_or_else(|| "WebView2 returned an invalid script result.".to_owned())
 }
 
 #[cfg(windows)]

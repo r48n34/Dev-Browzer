@@ -81,3 +81,9 @@ Screenshot capture uses WebView2's Chrome DevTools Protocol from a dedicated Tau
 Captures are written below the application data `captures` directory. Exported self-contained HTML
 reports are written below `reports`; capture paths are validated before their contents are embedded.
 Everything remains local.
+
+The session-data manager reads cookies and local storage through the WebView2 DevTools protocol.
+Cookie writes and deletes use WebView2's profile CookieManager, scoped to the current preview URL,
+while local-storage operations run against the active preview's current origin. This allows
+HttpOnly cookies to be managed without granting remote preview pages access to Tauri commands.
+Destructive actions require a confirmation modal.

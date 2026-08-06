@@ -32,7 +32,6 @@ import { usePreviewGeometry } from '../hooks/usePreviewGeometry';
 import {
   bringPreviewToFront,
   isTauriRuntime,
-  listenForActivePreview,
   openPreviewDevtools,
   reloadPreview,
 } from '../native/bridge';
@@ -52,6 +51,8 @@ interface PreviewBoardProps {
   onFocus: (id: string | null) => void;
   onEditProject: () => void;
   onCapture: () => void;
+  activeId: string | null;
+  onActiveChange: (id: string) => void;
 }
 
 interface DragSession {
@@ -88,6 +89,8 @@ export function PreviewBoard({
   onFocus,
   onEditProject,
   onCapture,
+  activeId,
+  onActiveChange,
 }: PreviewBoardProps) {
   const {
     activeProject,
@@ -100,7 +103,6 @@ export function PreviewBoard({
   } = useDevBrowzer();
   const [liveLayouts, setLiveLayouts] = useState<Record<string, PreviewBoardLayout>>({});
   const [draggingId, setDraggingId] = useState<string | null>(null);
-  const [activeId, setActiveId] = useState<string | null>(null);
   const [fitLimited, setFitLimited] = useState(false);
   const dragRef = useRef<DragSession | null>(null);
   const workspaceRef = useRef<HTMLDivElement | null>(null);
@@ -155,27 +157,8 @@ export function PreviewBoard({
   useEffect(() => {
     setLiveLayouts({});
     setDraggingId(null);
-    setActiveId(null);
     dragRef.current = null;
   }, [activeProject?.id]);
-
-  useEffect(() => {
-    let disposed = false;
-    let unlisten: () => void = () => undefined;
-
-    void listenForActivePreview((viewportId) => setActiveId(viewportId)).then((cleanup) => {
-      if (disposed) {
-        cleanup();
-      } else {
-        unlisten = cleanup;
-      }
-    });
-
-    return () => {
-      disposed = true;
-      unlisten();
-    };
-  }, []);
 
   useEffect(() => {
     measure();
@@ -295,7 +278,7 @@ export function PreviewBoard({
   }
 
   const activateBoard = (viewportId: string) => {
-    setActiveId(viewportId);
+    onActiveChange(viewportId);
     void bringPreviewToFront(viewportId);
   };
 

@@ -1,6 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type {
+  BrowserCookie,
+  BrowserSessionData,
   PreviewLayout,
   CaptureSession,
   PreviewCapture,
@@ -76,6 +78,41 @@ export async function closePreviews(): Promise<void> {
 
 export async function setNavigationSync(enabled: boolean): Promise<void> {
   await invokeIfTauri('set_navigation_sync', { enabled });
+}
+
+export async function getBrowserSessionData(id: string): Promise<BrowserSessionData | null> {
+  return invokeIfTauri<BrowserSessionData>('get_browser_session_data', { id });
+}
+
+export async function setBrowserCookie(id: string, cookie: BrowserCookie): Promise<void> {
+  await invokeIfTauri('set_browser_cookie', { id, cookie });
+}
+
+export async function deleteBrowserCookie(
+  id: string,
+  cookie: Pick<BrowserCookie, 'name' | 'domain' | 'path'>,
+): Promise<void> {
+  await invokeIfTauri('delete_browser_cookie', { id, cookie });
+}
+
+export async function clearBrowserCookies(id: string): Promise<void> {
+  await invokeIfTauri('clear_browser_cookies', { id });
+}
+
+export async function setBrowserLocalStorage(
+  id: string,
+  key: string,
+  value: string,
+): Promise<void> {
+  await invokeIfTauri('set_browser_local_storage', { id, key, value });
+}
+
+export async function deleteBrowserLocalStorage(id: string, key: string): Promise<void> {
+  await invokeIfTauri('delete_browser_local_storage', { id, key });
+}
+
+export async function clearBrowserLocalStorage(id: string): Promise<void> {
+  await invokeIfTauri('clear_browser_local_storage', { id });
 }
 
 export async function listenForPreviewNavigation(

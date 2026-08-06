@@ -15,13 +15,14 @@ screens without constantly resizing a browser window. Open your local site once,
 
 ## What you can do
 
-|                                |                                                                                                                    |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
-| **Compare responsive layouts** | Start with the Essential phone, tablet, and HD desktop set, or switch to Mobile, Desktop, All, or a custom preset. |
-| **Browse in sync**             | Follow links, redirects, history, hash changes, and popups across every synchronized preview.                      |
-| **Repeat review flows**        | Save project routes, step through them in review mode, and restore named viewport and layout presets.              |
-| **Inspect realistic devices**  | Configure pixel ratio, user agent, touch, color scheme, reduced motion, and network behavior per viewport.         |
-| **Capture visual evidence**    | Capture ready previews together, compare local sessions, add notes, and export a self-contained HTML report.       |
+|                                 |                                                                                                                    |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| **Compare responsive layouts**  | Start with the Essential phone, tablet, and HD desktop set, or switch to Mobile, Desktop, All, or a custom preset. |
+| **Browse in sync**              | Follow links, redirects, history, hash changes, and popups across every synchronized preview.                      |
+| **Repeat review flows**         | Save project routes, step through them in review mode, and restore named viewport and layout presets.              |
+| **Inspect realistic devices**   | Configure pixel ratio, user agent, touch, color scheme, reduced motion, and network behavior per viewport.         |
+| **Capture visual evidence**     | Capture ready previews together, compare local sessions, add notes, and export a self-contained HTML report.       |
+| **Manage browser session data** | Inspect, add, edit, or remove cookies and local storage for the active preview without leaving the workbench.      |
 
 ## Start previewing
 
